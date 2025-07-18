@@ -16,15 +16,8 @@ import SessionCard from './SessionCard';
 interface APISession {
   name: string;
   status: string;
-  config: {
-    metadata: any;
-    webhooks: any[];
-  };
-  me?: {
-    id: string;
-    pushName: string;
-    jid: string;
-  };
+  config: any;
+  me?: any;
   assignedWorker: string;
 }
 
@@ -33,7 +26,7 @@ interface SessionIdOnly {
 }
 
 export default function SessionManager() {
-  const [sessions, setSessions] = useState<SessionIdOnly[]>([]);
+  const [sessions, setSessions] = useState<APISession[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showQRModal, setShowQRModal] = useState(false);
@@ -47,7 +40,7 @@ export default function SessionManager() {
       const response = await authenticatedFetch('/sessions');
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const apiSessions: APISession[] = await response.json();
-      setSessions(apiSessions.map(s => ({ id: s.name })));
+      setSessions(apiSessions);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Bir hata oluştu');
     } finally {
@@ -68,7 +61,7 @@ export default function SessionManager() {
         method: 'DELETE'
       });
       if (response.ok) {
-        setSessions(sessions.filter(session => session.id !== sessionId));
+        setSessions(sessions.filter(session => session.name !== sessionId));
       }
     } catch (err) {
       console.error('Error removing session:', err);
@@ -149,34 +142,24 @@ export default function SessionManager() {
         </div>
 
         {/* Quick Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-medium text-gray-600">Aktif Sessionlar</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-green-600">
-                {sessions.filter(s => s.id.includes('connected')).length}
+                {sessions.filter(s => s.status === 'WORKING').length}
               </div>
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-gray-600">Toplam Mesaj</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-blue-600">
-                {sessions.reduce((sum, s) => sum + s.id.length, 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-gray-600">Dikkat Gereken</CardTitle>
+              <CardTitle className="text-sm font-medium text-gray-600">Pasif Sessionlar</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-orange-600">
-                {sessions.filter(s => !s.id.includes('connected')).length}
+                {sessions.filter(s => s.status !== 'WORKING').length}
               </div>
             </CardContent>
           </Card>
@@ -201,8 +184,8 @@ export default function SessionManager() {
         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
           {sessions.map((session) => (
             <SessionCard
-              key={session.id}
-              sessionId={session.id}
+              key={session.name}
+              sessionId={session.name}
               onRemove={handleRemove}
               onRestart={handleRestart}
               onReconnect={handleReconnect}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Users, Search, Plus, Mail, Trash2, Edit, UserCheck, UserX, Smartphone, Activity, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -28,36 +28,38 @@ export default function Employees() {
   const [error, setError] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [activeSessionCount, setActiveSessionCount] = useState<number>(0);
+  const [createdUser, setCreatedUser] = useState<{email: string, password: string} | null>(null);
+  const csvDownloadRef = useRef<HTMLAnchorElement>(null);
+
+  // fetchData fonksiyonunu useEffect dışına çıkar
+  const fetchData = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [meRes, usersRes, sessionsRes] = await Promise.all([
+        authenticatedFetch('/company/me'),
+        authenticatedFetch('/company/users'),
+        authenticatedFetch('/sessions')
+      ]);
+      if (!meRes.ok) throw new Error('Şirket bilgisi alınamadı');
+      if (!usersRes.ok) throw new Error('Kullanıcı listesi alınamadı');
+      if (!sessionsRes.ok) throw new Error('Session bilgisi alınamadı');
+      const meData = await meRes.json();
+      const usersData = await usersRes.json();
+      const sessionsData = await sessionsRes.json();
+      setCompany(meData);
+      setUsers(usersData);
+      setActiveSessionCount(Array.isArray(sessionsData) ? sessionsData.length : 0);
+      const myUser = usersData.find((u: any) => u.role === 'admin');
+      setIsAdmin(!!myUser);
+    } catch (err: any) {
+      setError(err.message || 'Bir hata oluştu');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        // Şirket ve kullanıcıları çek
-        const [meRes, usersRes, sessionsRes] = await Promise.all([
-          authenticatedFetch('/company/me'),
-          authenticatedFetch('/company/users'),
-          authenticatedFetch('/sessions')
-        ]);
-        if (!meRes.ok) throw new Error('Şirket bilgisi alınamadı');
-        if (!usersRes.ok) throw new Error('Kullanıcı listesi alınamadı');
-        if (!sessionsRes.ok) throw new Error('Session bilgisi alınamadı');
-        const meData = await meRes.json();
-        const usersData = await usersRes.json();
-        const sessionsData = await sessionsRes.json();
-        setCompany(meData);
-        setUsers(usersData);
-        setActiveSessionCount(Array.isArray(sessionsData) ? sessionsData.length : 0);
-        // Kullanıcı admin mi kontrolü (ilk user'ın rolü admin ise erişim ver)
-        const myUser = usersData.find((u: any) => u.role === 'admin');
-        setIsAdmin(!!myUser);
-      } catch (err: any) {
-        setError(err.message || 'Bir hata oluştu');
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchData();
   }, []);
 
@@ -119,23 +121,63 @@ export default function Employees() {
     }
   };
 
-  const handleAddEmployee = () => {
-    // API çağrısı burada yapılacak
-    console.log('Yeni çalışan ekleniyor:', newEmployee);
-    setIsAddEmployeeOpen(false);
-    setNewEmployee({ name: '', email: '', password: '' });
-    setShowPassword(false);
+  // Güçlü şifre generate fonksiyonu
+  const generatePassword = (length = 12) => {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=';
+    let pass = '';
+    for (let i = 0; i < length; i++) {
+      pass += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return pass;
   };
 
-  const handleDeleteEmployee = (employeeId: string) => {
-    // API çağrısı burada yapılacak
-    console.log('Çalışan siliniyor:', employeeId);
+  // CSV indirme fonksiyonu
+  const downloadCSV = (email: string, password: string) => {
+    const csv = `email,password\n${email},${password}`;
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    if (csvDownloadRef.current) {
+      csvDownloadRef.current.href = url;
+      csvDownloadRef.current.download = `user-credentials-${email}.csv`;
+      csvDownloadRef.current.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
   };
 
+  // Çalışan ekleme fonksiyonunu güncelle
+  const handleAddEmployee = async () => {
+    // API çağrısı burada yapılacak
+    try {
+      const res = await authenticatedFetch('/users/create-normal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: newEmployee.email,
+          password: newEmployee.password
+        })
+      });
+      if (!res.ok) throw new Error('Kullanıcı oluşturulamadı');
+      setCreatedUser({ email: newEmployee.email, password: newEmployee.password });
+      setIsAddEmployeeOpen(false);
+      setNewEmployee({ name: '', email: '', password: '' });
+      setShowPassword(false);
+      await fetchData();
+    } catch (err) {
+      alert('Kullanıcı oluşturulamadı!');
+    }
+  };
+
+  // handleToggleStatus fonksiyonunu koru
   const handleToggleStatus = (employeeId: string, currentStatus: string) => {
     // API çağrısı burada yapılacak
     const newStatus = currentStatus === 'active' ? 'inactive' : 'active';
     console.log('Çalışan durumu değiştiriliyor:', employeeId, newStatus);
+  };
+
+  // handleDeleteEmployee fonksiyonunu koru
+  const handleDeleteEmployee = (employeeId: string) => {
+    // API çağrısı burada yapılacak
+    console.log('Çalışan siliniyor:', employeeId);
   };
 
   // Filtreleme
@@ -241,6 +283,18 @@ export default function Employees() {
                     </Button>
                   </div>
                 </div>
+                {createdUser && (
+                  <div className="my-4 flex items-center space-x-2">
+                    <Button
+                      onClick={() => downloadCSV(createdUser.email, createdUser.password)}
+                      className="bg-green-600 hover:bg-green-700 text-white"
+                    >
+                      Kullanıcı Bilgilerini CSV Olarak İndir
+                    </Button>
+                    <a ref={csvDownloadRef} style={{ display: 'none' }} />
+                    <span className="text-xs text-gray-500">(Bu dosya sadece bir kereye mahsus indirilebilir!)</span>
+                  </div>
+                )}
               </DialogContent>
             </Dialog>
           </div>

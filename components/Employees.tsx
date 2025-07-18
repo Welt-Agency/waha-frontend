@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Users, Search, Plus, Mail, Trash2, Edit, UserCheck, UserX, Smartphone, Activity, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
+import { authenticatedFetch } from '@/lib/auth';
 
 export default function Employees() {
   const [searchQuery, setSearchQuery] = useState('');
@@ -21,63 +22,77 @@ export default function Employees() {
     email: '',
     password: ''
   });
+  const [company, setCompany] = useState<any>(null);
+  const [users, setUsers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [activeSessionCount, setActiveSessionCount] = useState<number>(0);
 
-  // Dummy data - gerçek veriler API'den gelecek
-  const employees = [
-    {
-      id: '1',
-      name: 'Ahmet Yılmaz',
-      email: 'ahmet@company.com',
-      role: 'admin',
-      department: 'Satış',
-      status: 'active',
-      lastLogin: '2 saat önce',
-      joinDate: '15 Ocak 2024',
-      avatar: null
-    },
-    {
-      id: '2',
-      name: 'Ayşe Kaya',
-      email: 'ayse@company.com',
-      role: 'user',
-      department: 'Müşteri Hizmetleri',
-      status: 'active',
-      lastLogin: '1 gün önce',
-      joinDate: '10 Ocak 2024',
-      avatar: null
-    },
-    {
-      id: '3',
-      name: 'Mehmet Öz',
-      email: 'mehmet@company.com',
-      role: 'user',
-      department: 'Pazarlama',
-      status: 'inactive',
-      lastLogin: '1 hafta önce',
-      joinDate: '5 Ocak 2024',
-      avatar: null
-    },
-    {
-      id: '4',
-      name: 'Fatma Demir',
-      email: 'fatma@company.com',
-      role: 'moderator',
-      department: 'Satış',
-      status: 'active',
-      lastLogin: '30 dk önce',
-      joinDate: '20 Aralık 2023',
-      avatar: null
-    }
-  ];
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        // Şirket ve kullanıcıları çek
+        const [meRes, usersRes, sessionsRes] = await Promise.all([
+          authenticatedFetch('/company/me'),
+          authenticatedFetch('/company/users'),
+          authenticatedFetch('/sessions')
+        ]);
+        if (!meRes.ok) throw new Error('Şirket bilgisi alınamadı');
+        if (!usersRes.ok) throw new Error('Kullanıcı listesi alınamadı');
+        if (!sessionsRes.ok) throw new Error('Session bilgisi alınamadı');
+        const meData = await meRes.json();
+        const usersData = await usersRes.json();
+        const sessionsData = await sessionsRes.json();
+        setCompany(meData);
+        setUsers(usersData);
+        setActiveSessionCount(Array.isArray(sessionsData) ? sessionsData.length : 0);
+        // Kullanıcı admin mi kontrolü (ilk user'ın rolü admin ise erişim ver)
+        const myUser = usersData.find((u: any) => u.role === 'admin');
+        setIsAdmin(!!myUser);
+      } catch (err: any) {
+        setError(err.message || 'Bir hata oluştu');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
-  const filteredEmployees = employees.filter(employee =>
-    employee.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    employee.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    employee.department.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  if (loading) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <span className="text-gray-600">Yükleniyor...</span>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <span className="text-red-600">{error}</span>
+      </div>
+    );
+  }
+  if (!isAdmin) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <span className="text-orange-600 font-semibold">Bu sayfaya erişim yetkiniz yok.</span>
+      </div>
+    );
+  }
 
-  const getInitials = (name: string) => {
+  const getInitials = (name: string | undefined | null) => {
+    if (!name) return '';
     return name.split(' ').map(n => n[0]).join('').toUpperCase();
+  };
+
+  const getDisplayName = (employee: any) => {
+    const first = employee.profile?.first_name;
+    const last = employee.profile?.last_name;
+    if (first || last) return [first, last].filter(Boolean).join(' ');
+    return employee.profile?.email || 'Bilinmeyen';
   };
 
   const getRoleBadge = (role: string) => {
@@ -122,6 +137,13 @@ export default function Employees() {
     const newStatus = currentStatus === 'active' ? 'inactive' : 'active';
     console.log('Çalışan durumu değiştiriliyor:', employeeId, newStatus);
   };
+
+  // Filtreleme
+  const filteredEmployees = users.filter(employee =>
+    getDisplayName(employee).toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (employee.profile?.email || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (employee.department || '').toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   return (
     <div className="h-full overflow-y-auto">
@@ -244,7 +266,7 @@ export default function Employees() {
               <div className="flex items-center">
                 <Users className="h-8 w-8 text-[#075E54] mr-3" />
                 <div>
-                  <div className="text-2xl font-bold text-gray-900">{employees.length}</div>
+                  <div className="text-2xl font-bold text-gray-900">{users.length}</div>
                   <p className="text-sm text-gray-600">Toplam Çalışan</p>
                 </div>
               </div>
@@ -266,8 +288,8 @@ export default function Employees() {
               <div className="flex items-center">
                 <Activity className="h-8 w-8 text-orange-600 mr-3" />
                 <div>
-                  <div className="text-2xl font-bold text-gray-900">8</div>
-                  <p className="text-sm text-gray-600">Aktif Session</p>
+                  <div className="text-2xl font-bold text-gray-900">{activeSessionCount}</div>
+                  <p className="text-sm text-gray-600">Toplam Session</p>
                 </div>
               </div>
             </CardContent>
@@ -289,13 +311,13 @@ export default function Employees() {
                   <Avatar className="h-12 w-12">
                     <AvatarImage src={employee.avatar || undefined} />
                     <AvatarFallback className="bg-[#075E54] text-white">
-                      {getInitials(employee.name)}
+                      {getInitials(getDisplayName(employee))}
                     </AvatarFallback>
                   </Avatar>
                   
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between mb-1">
-                      <h3 className="font-medium text-gray-900">{employee.name}</h3>
+                      <h3 className="font-medium text-gray-900">{getDisplayName(employee)}</h3>
                       <div className="flex items-center space-x-2">
                         {getRoleBadge(employee.role)}
                         {getStatusBadge(employee.status)}
@@ -305,7 +327,7 @@ export default function Employees() {
                     <div className="flex items-center space-x-4 mb-2">
                       <div className="flex items-center space-x-1 text-sm text-gray-600">
                         <Mail className="h-4 w-4" />
-                        <span>{employee.email}</span>
+                        <span>{employee.profile?.email}</span>
                       </div>
                       <div className="text-sm text-gray-600">
                         <span>{employee.department}</span>
@@ -343,7 +365,7 @@ export default function Employees() {
                         <AlertDialogHeader>
                           <AlertDialogTitle>Çalışanı Sil</AlertDialogTitle>
                           <AlertDialogDescription>
-                            {employee.name} adlı çalışanı sistemden kalıcı olarak silmek istediğinizden emin misiniz? 
+                            {getDisplayName(employee)} adlı çalışanı sistemden kalıcı olarak silmek istediğinizden emin misiniz? 
                             Bu işlem geri alınamaz.
                           </AlertDialogDescription>
                         </AlertDialogHeader>

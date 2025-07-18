@@ -36,22 +36,46 @@ export default function SessionManager() {
   const [showErrorDialog, setShowErrorDialog] = useState(false);
   const [newSessionName, setNewSessionName] = useState('');
   const [company, setCompany] = useState<any>(null);
+  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
+  const [sessionCountInfo, setSessionCountInfo] = useState<{ session_limit: number, count: number } | null>(null);
 
   // API'den session id listesini çek
   const fetchSessionIds = async () => {
     try {
       setLoading(true);
       setError(null);
-      const [sessionRes, companyRes] = await Promise.all([
-        authenticatedFetch('/sessions'),
-        authenticatedFetch('/company/me')
-      ]);
+      let sessionRes: any = undefined, countRes: any = undefined, companyRes: any = undefined, userRes: any = undefined;
+       if (currentUserRole === 'admin') {
+        [sessionRes, companyRes, userRes, countRes] = await Promise.all([
+          authenticatedFetch('/sessions'),
+          authenticatedFetch('/company/me'),
+          authenticatedFetch('/company/users'),
+          authenticatedFetch('/company/session-counts')
+        ]);
+      } else {
+        // Normal user ise sadece session ve count istekleri at
+        [sessionRes, countRes] = await Promise.all([
+          authenticatedFetch('/sessions'),
+          authenticatedFetch('/company/session-counts')
+        ]);
+        companyRes = { ok: false };
+        userRes = { ok: false };
+      }
       if (!sessionRes.ok) throw new Error(`HTTP error! status: ${sessionRes.status}`);
       const apiSessions: APISession[] = await sessionRes.json();
       setSessions(apiSessions);
-      if (companyRes.ok) {
+      if (companyRes && companyRes.ok) {
         const companyData = await companyRes.json();
         setCompany(companyData);
+      }
+      if (userRes && userRes.ok) {
+        const usersData = await userRes.json();
+        const adminUser = usersData.find((u: any) => u.role === 'admin');
+        setCurrentUserRole(adminUser ? 'admin' : 'normal');
+      }
+      if (countRes && countRes.ok) {
+        const countData = await countRes.json();
+        setSessionCountInfo(countData);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Bir hata oluştu');
@@ -149,6 +173,11 @@ export default function SessionManager() {
     }
   };
 
+  // isSessionLimitReached'i güncelle:
+  const isSessionLimitReached = !!sessionCountInfo && (
+    (sessionCountInfo.count !== undefined && sessionCountInfo.session_limit !== undefined && sessionCountInfo.count >= sessionCountInfo.session_limit)
+  );
+
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -229,17 +258,21 @@ export default function SessionManager() {
               setShowQRModal(true);
               setNewSessionName('');
             }}
-            className={`bg-[#075E54] hover:bg-[#064e44] text-white ${company && sessions.length >= (company.session_limit || company.sessionLimit || Infinity) ? 'opacity-50 cursor-not-allowed' : ''}`}
+            className={`bg-[#075E54] hover:bg-[#064e44] text-white ${isSessionLimitReached ? 'opacity-50 cursor-not-allowed' : ''}`}
             size="lg"
-            disabled={!!company && sessions.length >= (company.session_limit || company.sessionLimit || Infinity)}
+            disabled={isSessionLimitReached}
           >
             <Plus className="h-5 w-5 mr-2" />
             Yeni WhatsApp Numarası Ekle
           </Button>
-          {company && sessions.length >= (company.session_limit || company.sessionLimit || Infinity) && (
+          {isSessionLimitReached && (
             <div className="flex items-center space-x-2 text-red-600 text-sm">
               <AlertCircle className="h-5 w-5" />
-              <span>Session limitine ulaşıldı, lütfen admin ile konuşun</span>
+              <span>
+                {currentUserRole === 'admin'
+                  ? 'Session limitine ulaşıldı'
+                  : 'Session limitine ulaşıldı, lütfen admin ile konuşun'}
+              </span>
             </div>
           )}
         </div>

@@ -97,6 +97,7 @@ interface Contact {
   rawChatId: string;
   lastMessageAck: number; // Added for unread count
   lastMessageId: string; // Added for unread count
+  lastMessageTimestamp?: number;
 }
 
 interface Message {
@@ -124,7 +125,8 @@ export default function ConversationInbox() {
   const [messageInput, setMessageInput] = useState('');
   const [isNewConversationOpen, setIsNewConversationOpen] = useState(false);
   const [newPhoneNumber, setNewPhoneNumber] = useState('');
-  const [selectedSession, setSelectedSession] = useState('');
+  const [selectedSession, setSelectedSession] = useState<string>('');
+  const [allSessionsMode, setAllSessionsMode] = useState(false);
 
   // API Data State
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -201,7 +203,8 @@ export default function ConversationInbox() {
           isArchived: false,
           rawChatId: chat.id,
           lastMessageAck: chat.lastMessage.ack, // Added for unread count
-          lastMessageId: chat.lastMessage.id // Added for unread count
+          lastMessageId: chat.lastMessage.id, // Added for unread count
+          lastMessageTimestamp: chat.lastMessage.timestamp,
         };
       });
       
@@ -321,10 +324,10 @@ export default function ConversationInbox() {
   }, []);
 
   useEffect(() => {
-    if (selectedSession) {
-      fetchChats(selectedSession);
+    if (selectedSession === 'ALL') {
+      handleSessionChange('ALL');
     }
-  }, [selectedSession]);
+  }, [sessions]);
 
   useEffect(() => {
     if (selectedContact) {
@@ -336,10 +339,61 @@ export default function ConversationInbox() {
   }, [selectedContact]);
 
   // Event handlers
-  const handleSessionChange = (newSessionId: string) => {
+  const handleSessionChange = async (newSessionId: string) => {
     setSelectedSession(newSessionId);
     setSelectedContact(null);
     setMessages([]);
+    if (newSessionId === 'ALL') {
+      setAllSessionsMode(true);
+      // Tüm sessionlar için fetchChats çağır
+      setLoading(true);
+      setError(null);
+      try {
+        const allContacts: Contact[] = [];
+        for (const session of sessions) {
+          const response = await authenticatedFetch(`/chats/${session.id}/overview`);
+          if (response.ok) {
+            const apiChats: APIChatOverview[] = await response.json();
+            const formattedContacts: Contact[] = apiChats.map((chat, index) => {
+              const phoneNumber = chat.id.replace('@c.us', '');
+              const displayName = chat.name || phoneNumber;
+              const lastMessageTime = new Date(chat.lastMessage.timestamp * 1000);
+              const timeAgo = getTimeAgo(lastMessageTime);
+              return {
+                id: `${session.id}_${chat.id}`,
+                name: displayName,
+                phone: `+${phoneNumber}`,
+                avatar: chat.picture || undefined,
+                lastMessage: chat.lastMessage.body || 'Media mesajı',
+                timestamp: timeAgo,
+                unreadCount: 0,
+                sessionLabel: session.label || session.id,
+                sessionPhone: session.phone || '',
+                sessionId: session.id,
+                isOnline: false,
+                isPinned: false,
+                isMuted: false,
+                isArchived: false,
+                rawChatId: chat.id,
+                lastMessageAck: chat.lastMessage.ack,
+                lastMessageId: chat.lastMessage.id,
+                lastMessageTimestamp: chat.lastMessage.timestamp,
+              };
+            });
+            allContacts.push(...formattedContacts);
+          }
+        }
+        allContacts.sort((a, b) => (b.lastMessageTimestamp || 0) - (a.lastMessageTimestamp || 0));
+        setContacts(allContacts);
+      } catch (err) {
+        setError('Konuşma verileri alınamadı');
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      setAllSessionsMode(false);
+      fetchChats(newSessionId);
+    }
   };
 
   const filteredContacts = contacts.filter(contact => {
@@ -414,7 +468,8 @@ export default function ConversationInbox() {
       isArchived: false,
       rawChatId: chatId,
       lastMessageAck: 0, // Initialize for new conversation
-      lastMessageId: 'false' // Initialize for new conversation
+      lastMessageId: 'false', // Initialize for new conversation
+      lastMessageTimestamp: undefined // Initialize for new conversation
     };
 
     setContacts(prev => [newContact, ...prev]);
@@ -470,11 +525,12 @@ export default function ConversationInbox() {
                   
                   <div className="space-y-2">
                     <Label htmlFor="session">Session Seç</Label>
-                    <Select value={selectedSession} onValueChange={setSelectedSession}>
-                      <SelectTrigger className="h-11">
-                        <SelectValue placeholder="Bir session seçin" />
+                    <Select value={selectedSession} onValueChange={handleSessionChange}>
+                      <SelectTrigger className="w-full h-10">
+                        <SelectValue placeholder="Session seçin" />
                       </SelectTrigger>
                       <SelectContent>
+                        <SelectItem value="ALL">Tüm Sessionlar</SelectItem>
                         {sessions.map((session) => (
                           <SelectItem key={session.id} value={session.id}>
                             <div className="flex flex-col">
@@ -515,6 +571,7 @@ export default function ConversationInbox() {
                   <SelectValue placeholder="Session seçin" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="ALL">Tüm Sessionlar</SelectItem>
                   {sessions.map((session) => (
                     <SelectItem key={session.id} value={session.id}>
                       <div className="flex items-center space-x-2">

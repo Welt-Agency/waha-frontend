@@ -298,16 +298,29 @@ export default function SessionManager() {
             <Smartphone className="h-16 w-16 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">Henüz WhatsApp sessionu yok</h3>
             <p className="text-gray-600 mb-6">İlk WhatsApp iş numaranızı ekleyerek başlayın</p>
-            <Button 
-              onClick={() => {
-                setSelectedSessionId(undefined);
-                setShowQRModal(true);
-              }}
-              className="bg-[#075E54] hover:bg-[#064e44] text-white"
-            >
-              <Plus className="h-5 w-5 mr-2" />
-              İlk Numaranızı Ekleyin
-            </Button>
+            <div className="flex items-center justify-center space-x-3">
+              <Button
+                onClick={() => {
+                  setSelectedSessionId(undefined);
+                  setShowQRModal(true);
+                }}
+                className={`bg-[#075E54] hover:bg-[#064e44] text-white ${isSessionLimitReached ? 'opacity-50 cursor-not-allowed' : ''}`}
+                disabled={isSessionLimitReached}
+              >
+                <Plus className="h-5 w-5 mr-2" />
+                İlk Numaranızı Ekleyin
+              </Button>
+              {isSessionLimitReached && (
+                <div className="flex items-center space-x-2 text-red-600 text-sm">
+                  <AlertCircle className="h-5 w-5" />
+                  <span>
+                    {currentUserRole === 'admin'
+                      ? 'Session limitine ulaşıldı'
+                      : 'Session limitine ulaşıldı, lütfen admin ile konuşun'}
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

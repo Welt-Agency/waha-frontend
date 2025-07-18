@@ -331,7 +331,7 @@ export default function Employees() {
               <div className="flex items-center">
                 <Smartphone className="h-8 w-8 text-purple-600 mr-3" />
                 <div>
-                  <div className="text-2xl font-bold text-gray-900">15</div>
+                  <div className="text-2xl font-bold text-gray-900">{company?.session_limit || company?.sessionLimit || 0}</div>
                   <p className="text-sm text-gray-600">Session Limiti</p>
                 </div>
               </div>

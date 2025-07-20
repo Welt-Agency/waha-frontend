@@ -50,12 +50,12 @@ export default function SessionManager({ user }: SessionManagerProps) {
       let sessionRes: any = undefined, countRes: any = undefined, companyRes: any = undefined, userRes: any = undefined;
        if (user?.user_type === 'admin') {
         console.log('Admin ise tüm istekleri at');
-        [sessionRes, companyRes, userRes] = await Promise.all([
+        [sessionRes, countRes, companyRes, userRes] = await Promise.all([
           authenticatedFetch('/sessions'),
+          authenticatedFetch('/company/session-counts'),
           authenticatedFetch('/company/me'),
           authenticatedFetch('/company/users')
         ]);
-        countRes = { ok: false };
       } else {
         console.log('Normal user ise sadece session ve count istekleri at');
         [sessionRes, countRes] = await Promise.all([

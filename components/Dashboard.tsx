@@ -23,7 +23,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   const renderContent = () => {
     switch (activeTab) {
       case 'sessions':
-        return <SessionManager />;
+        return <SessionManager user={user} />;
       case 'conversations':
         return <ConversationInbox />;
       case 'bulk-message':
@@ -35,7 +35,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       case 'settings':
         return <Settings user={user} onLogout={onLogout} />;
       default:
-        return <SessionManager />;
+        return <SessionManager user={user} />;
     }
   };
 

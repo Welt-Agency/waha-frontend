@@ -13,6 +13,7 @@ import QRCodeModal from './QRCodeModal';
 import { authenticatedFetch } from '@/lib/auth';
 import SessionCard from './SessionCard';
 import { Dialog as AlertDialog, DialogContent as AlertDialogContent, DialogHeader as AlertDialogHeader, DialogTitle as AlertDialogTitle } from '@/components/ui/dialog';
+import { LoginResponse } from '@/lib/auth';
 
 interface APISession {
   name: string;
@@ -26,7 +27,11 @@ interface SessionIdOnly {
   id: string;
 }
 
-export default function SessionManager() {
+interface SessionManagerProps {
+  user: LoginResponse | null;
+}
+
+export default function SessionManager({ user }: SessionManagerProps) {
   const [sessions, setSessions] = useState<APISession[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -34,9 +39,7 @@ export default function SessionManager() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | undefined>(undefined);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [showErrorDialog, setShowErrorDialog] = useState(false);
-  const [newSessionName, setNewSessionName] = useState('');
   const [company, setCompany] = useState<any>(null);
-  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
   const [sessionCountInfo, setSessionCountInfo] = useState<{ session_limit: number, count: number } | null>(null);
 
   // API'den session id listesini çek
@@ -45,15 +48,16 @@ export default function SessionManager() {
       setLoading(true);
       setError(null);
       let sessionRes: any = undefined, countRes: any = undefined, companyRes: any = undefined, userRes: any = undefined;
-       if (currentUserRole === 'admin') {
-        [sessionRes, companyRes, userRes, countRes] = await Promise.all([
+       if (user?.user_type === 'admin') {
+        console.log('Admin ise tüm istekleri at');
+        [sessionRes, companyRes, userRes] = await Promise.all([
           authenticatedFetch('/sessions'),
           authenticatedFetch('/company/me'),
-          authenticatedFetch('/company/users'),
-          authenticatedFetch('/company/session-counts')
+          authenticatedFetch('/company/users')
         ]);
+        countRes = { ok: false };
       } else {
-        // Normal user ise sadece session ve count istekleri at
+        console.log('Normal user ise sadece session ve count istekleri at');
         [sessionRes, countRes] = await Promise.all([
           authenticatedFetch('/sessions'),
           authenticatedFetch('/company/session-counts')
@@ -70,13 +74,13 @@ export default function SessionManager() {
       }
       if (userRes && userRes.ok) {
         const usersData = await userRes.json();
-        const adminUser = usersData.find((u: any) => u.role === 'admin');
-        setCurrentUserRole(adminUser ? 'admin' : 'normal');
+        // User role zaten prop olarak geldiği için burada set etmeye gerek yok
       }
       if (countRes && countRes.ok) {
         const countData = await countRes.json();
         setSessionCountInfo(countData);
       }
+
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Bir hata oluştu');
     } finally {
@@ -129,54 +133,19 @@ export default function SessionManager() {
     }
   };
 
-  // Yeni WhatsApp Numarası Ekle butonu sadece modalı açacak:
-  const handleAddSession = async () => {
-    setSessionError(null);
-    try {
-      const response = await authenticatedFetch('/sessions', { method: 'POST' });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || data.error) {
-        setSessionError(data.error || 'Session oluşturulamadı.');
-        return;
-      }
-      setSelectedSessionId(undefined);
-      setShowQRModal(true);
-    } catch (err) {
-      setSessionError('Session oluşturulamadı.');
-    }
-  };
-
-  // Session oluşturma modalında 'Oluştur' butonuna basınca handleSessionCreate(sessionName) çağrılacak şekilde ilgili yeri güncelle
-  const handleSessionCreate = async (sessionName: string) => {
-    setSessionError(null);
-    try {
-      const response = await authenticatedFetch('/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: sessionName })
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || data.error) {
-        setSessionError(data.error || 'Session oluşturulamadı.');
-        setShowQRModal(false); // Modalı kapat
-        setShowErrorDialog(true); // Popup aç
-        fetchSessionIds(); // Session listesini güncelle
-        return;
-      }
-      // Başarılı ise normal akış
-      setShowQRModal(true);
-    } catch (err) {
-      setSessionError('Session oluşturulamadı.');
-      setShowQRModal(false);
-      setShowErrorDialog(true);
-      fetchSessionIds();
-    }
-  };
-
   // isSessionLimitReached'i güncelle:
   const isSessionLimitReached = !!sessionCountInfo && (
     (sessionCountInfo.count !== undefined && sessionCountInfo.session_limit !== undefined && sessionCountInfo.count >= sessionCountInfo.session_limit)
   );
+
+  // Yeni WhatsApp Numarası Ekle butonu sadece QR modalı açacak:
+  const handleAddSession = () => {
+    setSessionError(null);
+    setSelectedSessionId(undefined);
+    setShowQRModal(true);
+  };
+
+
 
   if (loading) {
     return (
@@ -253,11 +222,7 @@ export default function SessionManager() {
         {/* Add New Session Button */}
         <div className="mb-6 flex items-center space-x-3">
           <Button
-            onClick={() => {
-              setSelectedSessionId(undefined);
-              setShowQRModal(true);
-              setNewSessionName('');
-            }}
+            onClick={handleAddSession}
             className={`bg-[#075E54] hover:bg-[#064e44] text-white ${isSessionLimitReached ? 'opacity-50 cursor-not-allowed' : ''}`}
             size="lg"
             disabled={isSessionLimitReached}
@@ -269,7 +234,7 @@ export default function SessionManager() {
             <div className="flex items-center space-x-2 text-red-600 text-sm">
               <AlertCircle className="h-5 w-5" />
               <span>
-                {currentUserRole === 'admin'
+                {user?.user_type === 'admin'
                   ? 'Session limitine ulaşıldı'
                   : 'Session limitine ulaşıldı, lütfen admin ile konuşun'}
               </span>
@@ -300,10 +265,7 @@ export default function SessionManager() {
             <p className="text-gray-600 mb-6">İlk WhatsApp iş numaranızı ekleyerek başlayın</p>
             <div className="flex items-center justify-center space-x-3">
               <Button
-                onClick={() => {
-                  setSelectedSessionId(undefined);
-                  setShowQRModal(true);
-                }}
+                onClick={handleAddSession}
                 className={`bg-[#075E54] hover:bg-[#064e44] text-white ${isSessionLimitReached ? 'opacity-50 cursor-not-allowed' : ''}`}
                 disabled={isSessionLimitReached}
               >
@@ -314,7 +276,7 @@ export default function SessionManager() {
                 <div className="flex items-center space-x-2 text-red-600 text-sm">
                   <AlertCircle className="h-5 w-5" />
                   <span>
-                    {currentUserRole === 'admin'
+                    {user?.user_type === 'admin'
                       ? 'Session limitine ulaşıldı'
                       : 'Session limitine ulaşıldı, lütfen admin ile konuşun'}
                   </span>
@@ -359,32 +321,6 @@ export default function SessionManager() {
           </AlertDialogContent>
         </AlertDialog>
 
-        {/* Yeni Session Oluştur Modal */}
-        {showQRModal && (
-          <Dialog open={showQRModal} onOpenChange={setShowQRModal}>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Yeni Session Oluştur</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4">
-                <Label htmlFor="sessionName">Session Adı</Label>
-                <Input
-                  id="sessionName"
-                  value={newSessionName}
-                  onChange={e => setNewSessionName(e.target.value)}
-                  placeholder="Session adı girin"
-                />
-                <Button
-                  onClick={() => handleSessionCreate(newSessionName)}
-                  disabled={!newSessionName.trim()}
-                  className="bg-[#075E54] text-white"
-                >
-                  Oluştur
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
-        )}
       </div>
     </div>
   );

@@ -47,7 +47,7 @@ interface BulkMessageResult {
 }
 
 export default function BulkMessage() {
-  const [phoneNumbers, setPhoneNumbers] = useState('');
+  const [phoneListText, setPhoneListText] = useState('');
   const [messageContent, setMessageContent] = useState('');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSession, setSelectedSession] = useState<string[]>([]);
@@ -57,6 +57,11 @@ export default function BulkMessage() {
   const [useRotation, setUseRotation] = useState(false);
   const [useAI, setUseAI] = useState(false);
   const [messageDelaySeconds, setMessageDelaySeconds] = useState(1);
+
+  // Kullanıcı sayısını hesapla (her satır bir kişi)
+  const getUserCount = () => {
+    return phoneListText.split('\n').filter(line => line.trim().length > 0).length;
+  };
 
   // API'den session'ları çek
   const fetchSessions = async () => {
@@ -107,32 +112,15 @@ export default function BulkMessage() {
     }
   };
 
-  // AI ile mesajı özelleştir (geliştirilmiş)
-  const customizeMessageWithAI = (originalMessage: string, phoneNumber: string): string => {
-    const greetings = ['Merhaba', 'Selam', 'İyi günler', 'Merhaba değerli müşterimiz', 'Selam'];
-    const endings = ['', ' 🙂', ' 😊', ' 👋', ''];
-    const connectors = ['', ', ', '! ', ' - '];
-    
-    const greeting = greetings[Math.floor(Math.random() * greetings.length)];
-    const ending = endings[Math.floor(Math.random() * endings.length)];
-    const connector = connectors[Math.floor(Math.random() * connectors.length)];
-    
-    return `${greeting}${connector}${originalMessage}${ending}`;
-  };
-
-
   // Toplu mesaj gönder
   const handleBulkSend = async () => {
     if (!messageContent.trim()) {
       alert('Lütfen mesaj içeriğini girin');
       return;
     }
-    const numbers = phoneNumbers
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0);
-    if (numbers.length === 0) {
-      alert('Lütfen en az bir telefon numarası girin');
+    const userCount = getUserCount();
+    if (userCount === 0) {
+      alert('Lütfen en az bir kişi ekleyin');
       return;
     }
     if (selectedSession.length === 0) {
@@ -143,19 +131,15 @@ export default function BulkMessage() {
     setResults(null);
     try {
       let payload: any = {
-        chatIds: numbers,
+        phone_list_text: phoneListText,
         reply_to: null,
         text: messageContent,
         linkPreview: true,
         linkPreviewHighQuality: false,
         sessions: selectedSession,
         is_rotation_enabled: useRotation ? 'true' : 'false',
-        message_delay_seconds: messageDelaySeconds,
+        is_ai_enabled: useAI ? 'true' : 'false',
       };
-      // Eğer AI özgünleştirici aktifse, her numara için mesajı özelleştir
-      if (useAI) {
-        payload.texts = numbers.map(num => customizeMessageWithAI(messageContent, num));
-      }
       const response = await authenticatedFetch('/send-text-multiple', {
         method: 'POST',
         body: JSON.stringify(payload)
@@ -237,30 +221,31 @@ export default function BulkMessage() {
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* Sol Panel - Mesaj Hazırlama */}
         <div className="xl:col-span-2 space-y-6">
-          {/* Telefon Numaraları */}
+          {/* Telefon Listesi */}
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
                   <Users className="h-5 w-5 text-[#075E54]" />
-                  <CardTitle>Telefon Numaraları</CardTitle>
+                  <CardTitle>Telefon Listesi</CardTitle>
                 </div>
                 <Badge variant="outline" className="text-sm">
-                  {phoneNumbers.split('\n').filter(x => x.trim().length > 0).length} geçerli numara
+                  {getUserCount()} kişi
                 </Badge>
               </div>
               <CardDescription>
-                Her satıra bir telefon numarası girin (90XXXXXXXXXX formatında)
+                Her satıra bir kişi ekleyin: <br />
+                <span className="font-mono text-xs">+905551234567\temrullah\ttilki</span> <br />
+                (Numara, ad, soyad tab ile ayrılmış)
               </CardDescription>
             </CardHeader>
             <CardContent>
               <Textarea
-                placeholder="905551234567&#10;905551234568&#10;905551234569"
-                value={phoneNumbers}
-                onChange={(e) => setPhoneNumbers(e.target.value)}
+                placeholder={'+905551234567\temrullah\ttilki\n+905551234568\tsinan\tçelikiz'}
+                value={phoneListText}
+                onChange={(e) => setPhoneListText(e.target.value)}
                 className="min-h-[180px] font-mono text-sm"
               />
-              
             </CardContent>
           </Card>
 
@@ -461,7 +446,7 @@ export default function BulkMessage() {
             <CardContent className="pt-6">
               <Button
                 onClick={handleBulkSend}
-                disabled={loading || !messageContent.trim() || phoneNumbers.split('\n').filter(x => x.trim().length > 0).length === 0 || selectedSession.length === 0}
+                disabled={loading || !messageContent.trim() || getUserCount() === 0 || selectedSession.length === 0}
                 className="w-full h-14 bg-[#075E54] hover:bg-[#064e44] text-white font-medium text-lg"
                 size="lg"
               >
@@ -478,18 +463,12 @@ export default function BulkMessage() {
                 ) : (
                   <div className="flex items-center space-x-2">
                     <Send className="h-5 w-5" />
-                    <span>Toplu Mesaj Gönder ({phoneNumbers.split('\n').filter(x => x.trim().length > 0).length} kişi)</span>
+                    <span>Toplu Mesaj Gönder ({getUserCount()} kişi)</span>
                   </div>
                 )}
               </Button>
             </CardContent>
           </Card>
-          {results && (
-            <div className="mt-4 p-4 bg-gray-100 rounded text-xs break-all">
-              <strong>Sonuçlar:</strong>
-              <pre>{JSON.stringify(results, null, 2)}</pre>
-            </div>
-          )}
         </div>
 
         {/* Sağ Panel - Sonuçlar ve İstatistikler */}
@@ -523,6 +502,7 @@ export default function BulkMessage() {
                     <div className="text-2xl font-bold text-green-600">
                       {Array.isArray(results.data) ? results.data.filter((result: any) => {
                         // Başarı kontrolü
+                        if (result.error) return false;
                         if (results.ok) return true;
                         if (result._data?.Info?.IsFromMe === true) return true;
                         return false;
@@ -536,7 +516,8 @@ export default function BulkMessage() {
                     <div className="text-2xl font-bold text-red-600">
                       {Array.isArray(results.data) ? results.data.filter((result: any) => {
                         // Hata kontrolü
-                        if (!results.ok) return true;
+                        if (result.error) return true;
+                        if (results.ok) return false;
                         if (result._data?.Info?.IsFromMe === false) return true;
                         return false;
                       }).length : 0}
@@ -560,13 +541,38 @@ export default function BulkMessage() {
                         let phone = '';
                         if (result._data?.Info?.Chat) {
                           phone = result._data.Info.Chat.replace(/@.*/, '');
+                        } else if (result.chatId) {
+                          // chatId: 905072757678@c.us gibi
+                          phone = result.chatId.replace(/@.*/, '');
                         } else if (result.id) {
                           // id: true_905332310912@c.us_... gibi
                           const match = result.id.match(/_(\d+)@/);
                           phone = match ? match[1] : '';
                         }
+                        // Başarı durumu
+                        let isSuccess = false;
+                        if (result.error) isSuccess = false;
+                        else if (results.ok) isSuccess = true;
+                        else if (result._data?.Info?.IsFromMe === true) isSuccess = true;
+                        else isSuccess = false;
                         // Mesaj içeriği
                         let text = result._data?.Message?.extendedTextMessage?.text || '';
+                        // Eğer hata varsa ve error stringi içinde request.body.text varsa onu göster
+                        if (!isSuccess && result.error) {
+                          try {
+                            // error stringi içinde ilk { ile başlayan JSON'u bul
+                            const jsonStart = result.error.indexOf('{');
+                            if (jsonStart !== -1) {
+                              const jsonStr = result.error.slice(jsonStart);
+                              const parsed = JSON.parse(jsonStr);
+                              if (parsed?.request?.body?.text) {
+                                text = parsed.request.body.text;
+                              }
+                            }
+                          } catch (e) {
+                            // JSON parse hatası olursa mevcut text'i kullanmaya devam et
+                          }
+                        }
                         // Zaman
                         let timestamp = '';
                         if (result._data?.Info?.Timestamp) {
@@ -575,11 +581,19 @@ export default function BulkMessage() {
                             timestamp = d.toLocaleString('tr-TR');
                           } catch {}
                         }
-                        // Başarı durumu
-                        let isSuccess = false;
-                        if (results.ok) isSuccess = true;
-                        else if (result._data?.Info?.IsFromMe === true) isSuccess = true;
-                        else if (result._data?.Info?.IsFromMe === false) isSuccess = false;
+                        // Hata varsa logla
+                        if (!isSuccess && result.error) {
+                          console.log('Gönderim hatası:', result.error);
+                        }
+                        // Sender (gönderici) numarası
+                        let sender = '';
+                        if (result._data?.Info?.Sender) {
+                          // Sender: 905332310912:82@s.whatsapp.net gibi
+                          const match = result._data.Info.Sender.match(/^(\d+)/);
+                          sender = match ? match[1] : '';
+                        } else if (result.request?.body?.session) {
+                          sender = result.request.body.session;
+                        }
                         return (
                           <div key={index} className={`flex items-center space-x-3 p-3 border rounded-lg ${isSuccess ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
                             <div className="flex-shrink-0">
@@ -592,6 +606,9 @@ export default function BulkMessage() {
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center space-x-2">
                                 <p className="font-medium text-sm">{phone ? `+${phone}` : '-'}</p>
+                                {sender && (
+                                  <Badge variant="outline" className="text-xs ml-2">{sender}</Badge>
+                                )}
                               </div>
                               <p className="text-xs text-gray-600">{text}</p>
                               <p className="text-xs text-gray-500">{timestamp}</p>
@@ -618,7 +635,8 @@ export default function BulkMessage() {
             </CardHeader>
             <CardContent className="space-y-3 text-sm text-gray-600">
               <div>
-                <strong>Numara Formatı:</strong> 90XXXXXXXXXX formatında girin (örn: 905551234567)
+                <strong>Numara Formatı:</strong> Her satırda numara, ad ve soyad tab ile ayrılmış olmalı: <br />
+                <span className="font-mono text-xs">+905551234567\temrullah\ttilki</span>
               </div>
               <div>
                 <strong>Rotasyon:</strong> Mesajları farklı session'lar arasında döngüsel olarak gönderir

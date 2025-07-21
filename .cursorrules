@@ -1,0 +1,91 @@
+# WAHA Frontend v2 - SaaS WhatsApp Management System
+
+## Project Overview
+This is a SaaS (Software as a Service) WhatsApp management system where:
+- The project creator (you) will be the system administrator/monitor
+- Companies can register and manage their WhatsApp business numbers
+- Each company has session limits and user management
+- The system uses a multi-tenant architecture
+
+## User Types & Authentication
+
+### 1. Dev-User (System Administrator)
+- **Role**: You (the project creator) - system monitor and administrator
+- **Access**: Full system monitoring and management capabilities
+- **Authentication**: Will authenticate as "dev-user" to access backend operations
+- **Responsibilities**: 
+  - Monitor all companies and their activities
+  - Manage system-wide settings
+  - View analytics and system health
+  - Handle support and maintenance
+
+### 2. Company Admin
+- **Role**: Company-level administrator
+- **Access**: Manage their own company's WhatsApp sessions and users
+- **Authentication**: Company-specific login
+- **Responsibilities**:
+  - Manage WhatsApp business numbers for their company
+  - Add/remove users within their company
+  - Monitor session limits and usage
+
+### 3. Regular User
+- **Role**: Company employee
+- **Access**: Use WhatsApp sessions assigned to their company
+- **Authentication**: Company-specific login
+- **Responsibilities**:
+  - Use WhatsApp business features
+  - Send/receive messages through company sessions
+
+## Current Implementation Status
+
+### Admin Panel (Actually for Dev-User)
+- Located in `/app/admin/` and `/components/admin/`
+- Currently labeled as "Admin" but actually serves as the dev-user monitoring panel
+- Features:
+  - Company management (view all companies)
+  - User management (view all users across companies)
+  - System monitoring capabilities
+
+### Session Management
+- Session limits are enforced for both company admins and regular users
+- Admin users also have session limits (recently implemented)
+- Uses `/company/session-counts` endpoint for limit checking
+
+## Backend Integration Requirements
+
+### Authentication
+- Dev-user authentication needs to be implemented
+- Company-specific authentication flows
+- Session management and token handling
+
+### API Endpoints
+- `/sessions` - Session management
+- `/company/session-counts` - Session limit checking
+- `/company/me` - Company information
+- `/company/users` - Company user management
+- Additional endpoints for dev-user monitoring
+
+## Development Priorities
+
+1. **Dev-User Authentication**: Implement proper authentication for system administrator
+2. **Backend Integration**: Connect all frontend components to actual backend APIs
+3. **Real Data**: Replace dummy data with actual API calls
+4. **Monitoring Features**: Add comprehensive system monitoring for dev-user
+5. **Multi-tenant Security**: Ensure proper data isolation between companies
+
+## File Structure Notes
+
+- `/app/admin/` - Dev-user monitoring panel (not company admin)
+- `/components/admin/` - Dev-user interface components
+- `/components/` - Main application components for company users
+- Session management applies to all user types including dev-user
+
+## Technical Requirements
+
+- Next.js 14 with App Router
+- TypeScript
+- Tailwind CSS for styling
+- Shadcn/ui components
+- Proper error handling and loading states
+- Responsive design for all screen sizes
+- Real-time updates where necessary 

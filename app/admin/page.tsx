@@ -3,28 +3,32 @@
 import { useState, useEffect } from 'react';
 import AdminDashboard from '@/components/admin/AdminDashboard';
 import AdminLoginPage from '@/components/admin/AdminLoginPage';
+import { LoginResponse, getAccessToken, getUserInfo } from '@/lib/auth';
 
 export default function AdminPage() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [adminUser, setAdminUser] = useState<any>(null);
+  const [adminUser, setAdminUser] = useState<LoginResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   // Check for existing admin authentication on page load
   useEffect(() => {
     const checkAdminAuth = () => {
-      const adminToken = localStorage.getItem('admin_token');
-      const adminData = localStorage.getItem('admin_user');
+      const accessToken = getAccessToken();
+      const userInfo = getUserInfo();
       
-      if (adminToken && adminData) {
-        try {
-          const userData = JSON.parse(adminData);
-          setAdminUser(userData);
-          setIsLoggedIn(true);
-        } catch (error) {
-          // Invalid data, clear it
-          localStorage.removeItem('admin_token');
-          localStorage.removeItem('admin_user');
-        }
+      if (accessToken && userInfo.user_type === 'admin') {
+        // Reconstruct LoginResponse from localStorage data
+        const adminData: LoginResponse = {
+          access_token: accessToken,
+          refresh_token: localStorage.getItem('refresh_token') || '',
+          token_type: 'bearer',
+          user_id: userInfo.user_id || '',
+          email: userInfo.email || '',
+          user_type: userInfo.user_type || ''
+        };
+        
+        setAdminUser(adminData);
+        setIsLoggedIn(true);
       }
       
       setIsLoading(false);
@@ -33,16 +37,19 @@ export default function AdminPage() {
     checkAdminAuth();
   }, []);
 
-  const handleAdminLogin = (adminData: any) => {
+  const handleAdminLogin = (adminData: LoginResponse) => {
     setAdminUser(adminData);
     setIsLoggedIn(true);
-    localStorage.setItem('admin_token', adminData.token);
-    localStorage.setItem('admin_user', JSON.stringify(adminData));
   };
 
   const handleAdminLogout = () => {
-    localStorage.removeItem('admin_token');
-    localStorage.removeItem('admin_user');
+    // Clear all auth data
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    localStorage.removeItem('user_id');
+    localStorage.removeItem('user_email');
+    localStorage.removeItem('user_type');
+    
     setAdminUser(null);
     setIsLoggedIn(false);
   };

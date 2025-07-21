@@ -4,9 +4,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Shield, Lock, Mail, Eye, EyeOff } from 'lucide-react';
+import { LoginResponse, getAuthBaseUrl } from '@/lib/auth';
 
 interface AdminLoginPageProps {
-  onLogin: (adminData: any) => void;
+  onLogin: (adminData: LoginResponse) => void;
 }
 
 export default function AdminLoginPage({ onLogin }: AdminLoginPageProps) {
@@ -28,20 +29,33 @@ export default function AdminLoginPage({ onLogin }: AdminLoginPageProps) {
     setError('');
     
     try {
-      // Demo admin credentials - gerçek uygulamada API çağrısı yapılacak
-      if (email === 'superadmin@system.com' && password === 'SuperAdmin123!') {
-        const adminData = {
-          token: 'demo-admin-token-' + Date.now(),
+      const baseUrl = getAuthBaseUrl();
+      const response = await fetch(`${baseUrl}/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
           email: email,
-          name: 'Süper Admin',
-          role: 'super_admin',
-          permissions: ['manage_companies', 'manage_users', 'view_all']
-        };
-        
-        onLogin(adminData);
-      } else {
-        throw new Error('Geçersiz email veya şifre');
+          password: password
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || 'Giriş başarısız. Lütfen bilgilerinizi kontrol edin.');
       }
+
+      const authData: LoginResponse = await response.json();
+      
+      // Store the access token in localStorage for future use
+      localStorage.setItem('access_token', authData.access_token);
+      localStorage.setItem('refresh_token', authData.refresh_token);
+      localStorage.setItem('user_id', authData.user_id);
+      localStorage.setItem('user_email', authData.email);
+      localStorage.setItem('user_type', authData.user_type);
+      
+      onLogin(authData);
     } catch (error) {
       console.error('Admin login error:', error);
       setError(error instanceof Error ? error.message : 'Bir hata oluştu. Lütfen tekrar deneyin.');
@@ -147,10 +161,10 @@ export default function AdminLoginPage({ onLogin }: AdminLoginPageProps) {
 
               {/* Demo Credentials */}
               <div className="text-center">
-                <p className="text-sm text-gray-600 mb-3">Demo hesap bilgileri:</p>
+                <p className="text-sm text-gray-600 mb-3">Dev-User hesap bilgileri:</p>
                 <div className="bg-gray-50 p-3 rounded-lg text-sm">
-                  <p className="font-medium text-gray-700">Email: superadmin@system.com</p>
-                  <p className="font-medium text-gray-700">Şifre: SuperAdmin123!</p>
+                  <p className="font-medium text-gray-700">Email: dev-user@system.com</p>
+                  <p className="font-medium text-gray-700">Şifre: DevUser123!</p>
                 </div>
               </div>
             </form>

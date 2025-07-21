@@ -10,12 +10,13 @@ import {
   User
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { LoginResponse } from '@/lib/auth';
 
 interface AdminSidebarProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
   closeSidebar: () => void;
-  user?: any;
+  user?: LoginResponse;
   onLogout?: () => void;
 }
 
@@ -82,9 +83,9 @@ export default function AdminSidebar({ activeTab, setActiveTab, closeSidebar, us
               <User className="h-4 w-4 text-slate-900" />
             </div>
             <div className="flex-1">
-              <p className="text-sm font-medium">{user.name}</p>
+              <p className="text-sm font-medium">Dev-User</p>
               <p className="text-xs text-slate-300">{user.email}</p>
-              <p className="text-xs text-slate-400">{user.role}</p>
+              <p className="text-xs text-slate-400">{user.user_type}</p>
             </div>
             {onLogout && (
               <Button

@@ -41,6 +41,7 @@ export default function SessionManager({ user }: SessionManagerProps) {
   const [showErrorDialog, setShowErrorDialog] = useState(false);
   const [company, setCompany] = useState<any>(null);
   const [sessionCountInfo, setSessionCountInfo] = useState<{ session_limit: number, count: number } | null>(null);
+  const [startingSessions, setStartingSessions] = useState<Set<string>>(new Set());
 
   // API'den session id listesini çek
   const fetchSessionIds = async () => {
@@ -68,6 +69,16 @@ export default function SessionManager({ user }: SessionManagerProps) {
       if (!sessionRes.ok) throw new Error(`HTTP error! status: ${sessionRes.status}`);
       const apiSessions: APISession[] = await sessionRes.json();
       setSessions(apiSessions);
+      
+      // STARTING sessionları takip et
+      const newStartingSessions = new Set<string>();
+      apiSessions.forEach(session => {
+        if (session.status === 'STARTING') {
+          newStartingSessions.add(session.name);
+        }
+      });
+      setStartingSessions(newStartingSessions);
+      
       if (companyRes && companyRes.ok) {
         const companyData = await companyRes.json();
         setCompany(companyData);
@@ -88,10 +99,19 @@ export default function SessionManager({ user }: SessionManagerProps) {
     }
   };
 
+  // STARTING sessionlar için hızlı polling (2 saniyede bir)
+  useEffect(() => {
+    if (startingSessions.size > 0) {
+      const interval = setInterval(() => {
+        fetchSessionIds();
+      }, 2000); // 2 saniyede bir kontrol et
+      
+      return () => clearInterval(interval);
+    }
+  }, [startingSessions]);
+
   useEffect(() => {
     fetchSessionIds();
-    const interval = setInterval(fetchSessionIds, 60000); // 60 saniye
-    return () => clearInterval(interval);
   }, []);
 
   // Handler fonksiyonları SessionCard'a prop olarak geçilecek
@@ -248,6 +268,7 @@ export default function SessionManager({ user }: SessionManagerProps) {
             <SessionCard
               key={session.name}
               sessionId={session.name}
+              sessionData={session}
               onRemove={handleRemove}
               onRestart={handleRestart}
               onReconnect={handleReconnect}

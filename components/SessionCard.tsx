@@ -33,6 +33,7 @@ interface Session {
 
 interface SessionCardProps {
   sessionId: string;
+  sessionData?: APISession; // Optional prop for session data from parent
   onRemove: (sessionId: string) => void;
   onRestart: (sessionId: string) => void;
   onReconnect: (sessionId: string) => void;
@@ -40,44 +41,21 @@ interface SessionCardProps {
   onLogout: (sessionId: string) => void;
 }
 
-export default function SessionCard({ sessionId, onRemove, onRestart, onReconnect, onStop, onLogout }: SessionCardProps) {
+export default function SessionCard({ sessionId, sessionData, onRemove, onRestart, onReconnect, onStop, onLogout }: SessionCardProps) {
   const [session, setSession] = useState<Session | null>(null);
-  const [prevSession, setPrevSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
-  const [pollingStarting, setPollingStarting] = useState(false);
-  const startingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Session'ı fetch et
+  // Session'ı fetch et (sadece sessionData yoksa)
   const fetchSession = async () => {
+    if (sessionData) return; // Eğer sessionData prop olarak geldiyse fetch etme
+    
     try {
       setLoading(true);
       const response = await authenticatedFetch(`/sessions/${sessionId}`);
       if (!response.ok) throw new Error('Session alınamadı');
       const apiSession: APISession = await response.json();
       const mapped: Session = mapApiSession(apiSession);
-      // Değişiklik kontrolü
-      if (JSON.stringify(mapped) !== JSON.stringify(prevSession)) {
-        setSession(mapped);
-        setPrevSession(mapped);
-      }
-      // Eğer status STARTING ise polling başlat
-      if (apiSession.status === 'STARTING' && !pollingStarting) {
-        setPollingStarting(true);
-        if (!startingIntervalRef.current) {
-          startingIntervalRef.current = setInterval(() => {
-            fetchSession();
-          }, 2000);
-        }
-      }
-      // Eğer status WORKING ise polling'i durdur
-      if (apiSession.status === 'WORKING' && pollingStarting) {
-        setPollingStarting(false);
-        if (startingIntervalRef.current) {
-          clearInterval(startingIntervalRef.current);
-          startingIntervalRef.current = null;
-        }
-      }
+      setSession(mapped);
     } catch (err) {
       // Hata olursa session'ı null yapma, sadece loading'i kapat
     } finally {
@@ -85,27 +63,31 @@ export default function SessionCard({ sessionId, onRemove, onRestart, onReconnec
     }
   };
 
-  // Aksiyonlardan sonra session'ı hemen fetch et, restart için gecikmeli
-  const handleAndFetch = async (fn: () => void | Promise<void>, delayMs?: number) => {
-    await fn();
-    if (delayMs) {
-      setTimeout(() => {
-        fetchSession();
-      }, delayMs);
+  // sessionData prop'u değiştiğinde session'ı güncelle
+  useEffect(() => {
+    if (sessionData) {
+      const mapped: Session = mapApiSession(sessionData);
+      setSession(mapped);
+      setLoading(false);
     } else {
       fetchSession();
     }
-  };
+  }, [sessionData, sessionId]);
 
-  useEffect(() => {
-    fetchSession();
-    intervalRef.current = setInterval(fetchSession, 30000); // 30 saniye
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      if (startingIntervalRef.current) clearInterval(startingIntervalRef.current);
-    };
-    // eslint-disable-next-line
-  }, [sessionId]);
+  // Aksiyonlardan sonra session'ı hemen fetch et, restart için gecikmeli
+  const handleAndFetch = async (fn: () => void | Promise<void>, delayMs?: number) => {
+    await fn();
+    // Eğer sessionData prop olarak geliyorsa fetch etmeye gerek yok
+    if (!sessionData) {
+      if (delayMs) {
+        setTimeout(() => {
+          fetchSession();
+        }, delayMs);
+      } else {
+        fetchSession();
+      }
+    }
+  };
 
   if (loading && !session) {
     return (
@@ -180,6 +162,7 @@ export default function SessionCard({ sessionId, onRemove, onRestart, onReconnec
         status: apiSession.status === 'WORKING' ? 'connected' :
                 apiSession.status === 'STOPPED' ? 'stopped' :
                 apiSession.status === 'FAILED' ? 'failed' :
+                apiSession.status === 'STARTING' ? 'disconnected' :
                 'disconnected',
         lastActivity: 'Bugün',
         messagesCount: Math.floor(Math.random() * 1000),
@@ -195,7 +178,7 @@ export default function SessionCard({ sessionId, onRemove, onRestart, onReconnec
                apiSession.status === 'STOPPED' ? 'stopped' :
                apiSession.status === 'FAILED' ? 'failed' :
                'expired',
-        lastActivity: 'Bağlantı bekleniyor',
+        lastActivity: apiSession.status === 'STARTING' ? 'Başlatılıyor...' : 'Bağlantı bekleniyor',
         messagesCount: 0,
         originalData: apiSession
       };
@@ -226,16 +209,7 @@ export default function SessionCard({ sessionId, onRemove, onRestart, onReconnec
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {session.originalData?.status === 'SCAN_QR_CODE' ? (
-                <>
-                  <DropdownMenuItem onClick={() => handleAndFetch(() => onReconnect(session.id))}>
-                    QR ile Bağlan
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleAndFetch(() => onRemove(session.id))} className="text-red-600">
-                    Kaldır
-                  </DropdownMenuItem>
-                </>
-              ) : session.originalData?.status === 'WORKING' ? (
+              {session.originalData?.status === 'WORKING' ? (
                 <>
                   <DropdownMenuItem onClick={() => handleAndFetch(() => onStop(session.id))}>
                     Durdur
@@ -256,6 +230,44 @@ export default function SessionCard({ sessionId, onRemove, onRestart, onReconnec
                   <DropdownMenuItem onClick={() => handleAndFetch(() => onRestart(session.id))}>
                     <RotateCcw className="h-4 w-4 mr-2" />
                     Yeniden Başlat
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleAndFetch(() => onRemove(session.id))} className="text-red-600">
+                    Kaldır
+                  </DropdownMenuItem>
+                </>
+              ) : session.originalData?.status === 'STARTING' ? (
+                <>
+                  <DropdownMenuItem disabled>
+                    Başlatılıyor...
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleAndFetch(() => onStop(session.id))}>
+                    Durdur
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleAndFetch(() => onRemove(session.id))} className="text-red-600">
+                    Kaldır
+                  </DropdownMenuItem>
+                </>
+              ) : session.originalData?.status === 'SCAN_QR_CODE' ? (
+                <>
+                  <DropdownMenuItem onClick={() => handleAndFetch(() => onReconnect(session.id))}>
+                    QR ile Bağlan
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleAndFetch(() => onRestart(session.id))}>
+                    <RotateCcw className="h-4 w-4 mr-2" />
+                    Yeniden Başlat
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleAndFetch(() => onRemove(session.id))} className="text-red-600">
+                    Kaldır
+                  </DropdownMenuItem>
+                </>
+              ) : session.originalData?.status === 'FAILED' ? (
+                <>
+                  <DropdownMenuItem onClick={() => handleAndFetch(() => onRestart(session.id), 3000)}>
+                    <RotateCcw className="h-4 w-4 mr-2" />
+                    Yeniden Başlat
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleAndFetch(() => onLogout(session.id))}>
+                    Çıkış Yap ve Yeniden Başlat
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => handleAndFetch(() => onRemove(session.id))} className="text-red-600">
                     Kaldır
@@ -282,9 +294,13 @@ export default function SessionCard({ sessionId, onRemove, onRestart, onReconnec
             <div className="flex items-center space-x-2">
               {getStatusIcon(session.status)}
               <Badge className={getStatusColor(session.status)}>
-                {session.status === 'connected' ? 'Bağlı' : 
-                 session.status === 'disconnected' ? 
-                  (session.phoneNumber === 'Henüz bağlanmadı' ? 'QR Bekliyor' : 'Bağlantı Kesildi') : 
+                {session.originalData?.status === 'WORKING' ? 'Bağlı' : 
+                 session.originalData?.status === 'STOPPED' ? 'Durduruldu' :
+                 session.originalData?.status === 'STARTING' ? 'Başlatılıyor' :
+                 session.originalData?.status === 'SCAN_QR_CODE' ? 'QR Bekliyor' :
+                 session.originalData?.status === 'FAILED' ? 'Hata' :
+                 session.status === 'connected' ? 'Bağlı' : 
+                 session.status === 'disconnected' ? 'Bağlantı Kesildi' : 
                  session.status === 'stopped' ? 'Durduruldu' :
                  session.status === 'failed' ? 'Hata' :
                  'Süresi Doldu'}

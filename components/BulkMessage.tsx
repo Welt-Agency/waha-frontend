@@ -540,14 +540,14 @@ export default function BulkMessage() {
                         // Telefon numarası
                         let phone = '';
                         if (result._data?.Info?.Chat) {
-                          phone = result._data.Info.Chat.replace(/@.*/, '');
+                          phone = result._data.id.Chat.replace(/@.*/, '');
                         } else if (result.chatId) {
-                          // chatId: 905072757678@c.us gibi
-                          phone = result.chatId.replace(/@.*/, '');
-                        } else if (result.id) {
-                          // id: true_905332310912@c.us_... gibi
+                          phone = typeof result.chatId === 'string' ? result.chatId.replace(/@.*/, '') : '';
+                        } else if (result.id && typeof result.id === 'string') {
                           const match = result.id.match(/_(\d+)@/);
                           phone = match ? match[1] : '';
+                        } else if (result.from && typeof result.from === 'string') {
+                          phone = result.to.replace(/@.*/, '');
                         }
                         // Başarı durumu
                         let isSuccess = false;
@@ -588,11 +588,12 @@ export default function BulkMessage() {
                         // Sender (gönderici) numarası
                         let sender = '';
                         if (result._data?.Info?.Sender) {
-                          // Sender: 905332310912:82@s.whatsapp.net gibi
                           const match = result._data.Info.Sender.match(/^(\d+)/);
                           sender = match ? match[1] : '';
                         } else if (result.request?.body?.session) {
                           sender = result.request.body.session;
+                        } else if (result.from && typeof result.from === 'string') {
+                          sender = result.from.replace(/@.*/, '');
                         }
                         return (
                           <div key={index} className={`flex items-center space-x-3 p-3 border rounded-lg ${isSuccess ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>

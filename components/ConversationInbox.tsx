@@ -329,6 +329,13 @@ export default function ConversationInbox() {
     }
   }, [sessions]);
 
+  // selectedSession değiştiğinde ve ALL değilse otomatik olarak fetchChats çağır
+  useEffect(() => {
+    if (selectedSession && selectedSession !== 'ALL') {
+      fetchChats(selectedSession);
+    }
+  }, [selectedSession]);
+
   useEffect(() => {
     if (selectedContact) {
       const contact = contacts.find(c => c.id === selectedContact);

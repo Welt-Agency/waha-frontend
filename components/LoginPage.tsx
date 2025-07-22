@@ -178,25 +178,6 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
                   'Giriş Yap'
                 )}
               </Button>
-
-              {/* Divider */}
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-gray-300"></div>
-                </div>
-                <div className="relative flex justify-center text-sm">
-                  <span className="px-2 bg-white text-gray-500">veya</span>
-                </div>
-              </div>
-
-              {/* Demo Login */}
-              <div className="text-center">
-                <p className="text-sm text-gray-600 mb-3">Demo hesap ile giriş yapın:</p>
-                <div className="bg-gray-50 p-3 rounded-lg text-sm">
-                  <p className="font-medium text-gray-700">Email: admin2@gmail.com</p>
-                  <p className="font-medium text-gray-700">Şifre: AdminTest123!</p>
-                </div>
-              </div>
             </form>
           </CardContent>
         </Card>

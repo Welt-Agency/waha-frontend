@@ -139,6 +139,7 @@ export default function BulkMessage() {
         sessions: selectedSession,
         is_rotation_enabled: useRotation ? 'true' : 'false',
         is_ai_enabled: useAI ? 'true' : 'false',
+        message_delay_seconds: messageDelaySeconds,
       };
       const response = await authenticatedFetch('/send-text-multiple', {
         method: 'POST',
@@ -540,7 +541,7 @@ export default function BulkMessage() {
                         // Telefon numarası
                         let phone = '';
                         if (result._data?.Info?.Chat) {
-                          phone = result._data.id.Chat.replace(/@.*/, '');
+                          phone = result._data.Info?.Chat.replace(/@.*/, '');
                         } else if (result.chatId) {
                           phone = typeof result.chatId === 'string' ? result.chatId.replace(/@.*/, '') : '';
                         } else if (result.id && typeof result.id === 'string') {

@@ -18,8 +18,15 @@ import { LoginResponse } from '@/lib/auth';
 interface APISession {
   name: string;
   status: string;
-  config: any;
-  me?: any;
+  config: {
+    metadata: any;
+    webhooks: any[];
+  };
+  me?: {
+    id: string;
+    pushName: string;
+    jid: string;
+  };
   assignedWorker: string;
 }
 
@@ -43,14 +50,33 @@ export default function SessionManager({ user }: SessionManagerProps) {
   const [sessionCountInfo, setSessionCountInfo] = useState<{ session_limit: number, count: number } | null>(null);
   const [startingSessions, setStartingSessions] = useState<Set<string>>(new Set());
 
-  // API'den session id listesini çek
-  const fetchSessionIds = async () => {
+  // Sadece /sessions endpointini çeken fonksiyon (hızlı polling için)
+  const fetchSessionsOnly = async () => {
     try {
-      setLoading(true);
+      const response = await authenticatedFetch('/sessions');
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      const apiSessions: APISession[] = await response.json();
+      setSessions(apiSessions);
+      // STARTING sessionları takip et
+      const newStartingSessions = new Set<string>();
+      apiSessions.forEach(session => {
+        if (session.status === 'STARTING') {
+          newStartingSessions.add(session.name);
+        }
+      });
+      setStartingSessions(newStartingSessions);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Bir hata oluştu');
+    }
+  };
+
+  // Tüm endpointleri çeken fonksiyon (ilk yükleme ve manuel yenileme için)
+  const fetchAllSessionData = async (showLoading = true) => {
+    try {
+      if (showLoading) setLoading(true);
       setError(null);
       let sessionRes: any = undefined, countRes: any = undefined, companyRes: any = undefined, userRes: any = undefined;
-       if (user?.user_type === 'admin') {
-        console.log('Admin ise tüm istekleri at');
+      if (user?.user_type === 'admin') {
         [sessionRes, countRes, companyRes, userRes] = await Promise.all([
           authenticatedFetch('/sessions'),
           authenticatedFetch('/company/session-counts'),
@@ -58,7 +84,6 @@ export default function SessionManager({ user }: SessionManagerProps) {
           authenticatedFetch('/company/users')
         ]);
       } else {
-        console.log('Normal user ise sadece session ve count istekleri at');
         [sessionRes, countRes] = await Promise.all([
           authenticatedFetch('/sessions'),
           authenticatedFetch('/company/session-counts')
@@ -69,7 +94,6 @@ export default function SessionManager({ user }: SessionManagerProps) {
       if (!sessionRes.ok) throw new Error(`HTTP error! status: ${sessionRes.status}`);
       const apiSessions: APISession[] = await sessionRes.json();
       setSessions(apiSessions);
-      
       // STARTING sessionları takip et
       const newStartingSessions = new Set<string>();
       apiSessions.forEach(session => {
@@ -78,7 +102,6 @@ export default function SessionManager({ user }: SessionManagerProps) {
         }
       });
       setStartingSessions(newStartingSessions);
-      
       if (companyRes && companyRes.ok) {
         const companyData = await companyRes.json();
         setCompany(companyData);
@@ -91,27 +114,26 @@ export default function SessionManager({ user }: SessionManagerProps) {
         const countData = await countRes.json();
         setSessionCountInfo(countData);
       }
-
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Bir hata oluştu');
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 
-  // STARTING sessionlar için hızlı polling (2 saniyede bir)
+  // STARTING sessionlar için hızlı polling (sadece /sessions endpointi)
   useEffect(() => {
     if (startingSessions.size > 0) {
       const interval = setInterval(() => {
-        fetchSessionIds();
+        fetchSessionsOnly();
       }, 2000); // 2 saniyede bir kontrol et
-      
       return () => clearInterval(interval);
     }
   }, [startingSessions]);
 
+  // İlk yüklemede ve manuel yenilemede tüm endpointleri çek
   useEffect(() => {
-    fetchSessionIds();
+    fetchAllSessionData(true); // İlk yüklemede loading göster
   }, []);
 
   // Handler fonksiyonları SessionCard'a prop olarak geçilecek
@@ -185,7 +207,7 @@ export default function SessionManager({ user }: SessionManagerProps) {
           <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
           <h3 className="text-lg font-medium text-gray-900 mb-2">Bağlantı Hatası</h3>
           <p className="text-gray-600 mb-4">{error}</p>
-          <Button onClick={fetchSessionIds} className="bg-[#075E54] hover:bg-[#064e44]">
+          <Button onClick={() => fetchAllSessionData(true)} className="bg-[#075E54] hover:bg-[#064e44]">
             <RefreshCw className="h-4 w-4 mr-2" />
             Tekrar Dene
           </Button>
@@ -205,7 +227,7 @@ export default function SessionManager({ user }: SessionManagerProps) {
               <p className="text-gray-600">WhatsApp iş numaralarınızı ve bağlantılarınızı yönetin</p>
             </div>
             <Button 
-              onClick={fetchSessionIds}
+              onClick={() => fetchAllSessionData(true)}
               variant="outline"
               size="sm"
             >
@@ -318,7 +340,7 @@ export default function SessionManager({ user }: SessionManagerProps) {
           }}
           onSessionAdded={(newSession) => {
             // Yeni session eklendikten sonra listeyi yenile
-            fetchSessionIds();
+            fetchAllSessionData();
             setShowQRModal(false);
             setSelectedSessionId(undefined);
           }}

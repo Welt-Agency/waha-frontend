@@ -20,7 +20,8 @@ export default function Employees() {
   const [newEmployee, setNewEmployee] = useState({
     name: '',
     email: '',
-    password: ''
+    password: '',
+    session_limit: ''
   });
   const [company, setCompany] = useState<any>(null);
   const [users, setUsers] = useState<any[]>([]);
@@ -29,6 +30,7 @@ export default function Employees() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [activeSessionCount, setActiveSessionCount] = useState<number>(0);
   const [createdUser, setCreatedUser] = useState<{email: string, password: string} | null>(null);
+  const [usersRemainingSessionLimit, setUsersRemainingSessionLimit] = useState<number | null>(null);
   const csvDownloadRef = useRef<HTMLAnchorElement>(null);
 
   // fetchData fonksiyonunu useEffect dışına çıkar
@@ -45,12 +47,13 @@ export default function Employees() {
       if (!usersRes.ok) throw new Error('Kullanıcı listesi alınamadı');
       if (!sessionsRes.ok) throw new Error('Session bilgisi alınamadı');
       const meData = await meRes.json();
-      const usersData = await usersRes.json();
+      const usersDataRaw = await usersRes.json();
       const sessionsData = await sessionsRes.json();
       setCompany(meData);
-      setUsers(usersData);
+      setUsers(usersDataRaw.users || usersDataRaw); // fallback for old response
+      setUsersRemainingSessionLimit(typeof usersDataRaw.remaining_session_limit !== 'undefined' ? usersDataRaw.remaining_session_limit : null);
       setActiveSessionCount(Array.isArray(sessionsData) ? sessionsData.length : 0);
-      const myUser = usersData.find((u: any) => u.role === 'admin');
+      const myUser = (usersDataRaw.users || usersDataRaw).find((u: any) => u.role === 'admin');
       setIsAdmin(!!myUser);
     } catch (err: any) {
       setError(err.message || 'Bir hata oluştu');
@@ -153,13 +156,14 @@ export default function Employees() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: newEmployee.email,
-          password: newEmployee.password
+          password: newEmployee.password,
+          session_limit: Number(newEmployee.session_limit)
         })
       });
       if (!res.ok) throw new Error('Kullanıcı oluşturulamadı');
       setCreatedUser({ email: newEmployee.email, password: newEmployee.password });
       setIsAddEmployeeOpen(false);
-      setNewEmployee({ name: '', email: '', password: '' });
+      setNewEmployee({ name: '', email: '', password: '', session_limit: '' });
       setShowPassword(false);
       await fetchData();
     } catch (err) {
@@ -189,11 +193,18 @@ export default function Employees() {
   };
 
   // Filtreleme
-  const filteredEmployees = users.filter(employee =>
-    getDisplayName(employee).toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (employee.profile?.email || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (employee.department || '').toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredEmployees = users
+    .filter(employee =>
+      getDisplayName(employee).toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (employee.profile?.email || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (employee.department || '').toLowerCase().includes(searchQuery.toLowerCase())
+    )
+    .sort((a, b) => {
+      // Adminler önce gelsin
+      if (a.role === 'admin' && b.role !== 'admin') return -1;
+      if (a.role !== 'admin' && b.role === 'admin') return 1;
+      return 0;
+    });
 
   return (
     <div className="h-full overflow-y-auto">
@@ -210,7 +221,7 @@ export default function Employees() {
             <Dialog open={isAddEmployeeOpen} onOpenChange={(open) => {
               setIsAddEmployeeOpen(open);
               if (!open) {
-                setNewEmployee({ name: '', email: '', password: '' });
+                setNewEmployee({ name: '', email: '', password: '', session_limit: '' });
                 setShowPassword(false);
               }
             }}>
@@ -271,12 +282,29 @@ export default function Employees() {
                     </div>
                   </div>
                   
+                  <div className="space-y-2">
+                    <Label htmlFor="session_limit">Kullanıcı Session Limiti</Label>
+                    <Input
+                      id="session_limit"
+                      type="number"
+                      min={1}
+                      max={company?.remaining_session_limit || 1}
+                      placeholder="Kullanıcıya atanacak session limiti"
+                      value={newEmployee.session_limit}
+                      onChange={(e) => setNewEmployee({ ...newEmployee, session_limit: e.target.value })}
+                    />
+                  </div>
+                  <div className="flex items-center space-x-4 text-xs text-gray-500">
+                    <span>Toplam Session Limiti: <b>{company?.session_limit ?? '-'}</b></span>
+                    <span>Kalan Session Limiti: <b>{company?.remaining_session_limit ?? '-'}</b></span>
+                  </div>
+                  
                   <div className="flex justify-end space-x-2 pt-4">
                     <Button 
                       variant="outline" 
                       onClick={() => {
                         setIsAddEmployeeOpen(false);
-                        setNewEmployee({ name: '', email: '', password: '' });
+                        setNewEmployee({ name: '', email: '', password: '', session_limit: '' });
                         setShowPassword(false);
                       }}
                     >
@@ -284,7 +312,7 @@ export default function Employees() {
                     </Button>
                     <Button 
                       onClick={handleAddEmployee}
-                      disabled={!newEmployee.name || !newEmployee.email || !newEmployee.password}
+                      disabled={!newEmployee.name || !newEmployee.email || !newEmployee.password || !newEmployee.session_limit || Number(newEmployee.session_limit) < 1 || Number(newEmployee.session_limit) > (company?.remaining_session_limit || 0)}
                       className="bg-[#075E54] hover:bg-[#064e44]"
                     >
                       Çalışan Ekle
@@ -394,6 +422,14 @@ export default function Employees() {
                       <div className="text-sm text-gray-600">
                         <span>{employee.department}</span>
                       </div>
+                      {typeof employee.session_limit !== 'undefined' && (
+                        <>
+                          <Badge className="bg-yellow-100 text-yellow-800 ml-2">Session Limiti: {employee.session_limit}</Badge>
+                          {employee.role === 'admin' && usersRemainingSessionLimit !== null && (
+                            <Badge className="bg-green-100 text-green-800 ml-2">Kalan: {usersRemainingSessionLimit}</Badge>
+                          )}
+                        </>
+                      )}
                     </div>
                     
                     <div className="flex items-center space-x-4 text-xs text-gray-500">

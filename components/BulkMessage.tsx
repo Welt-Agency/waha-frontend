@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Send, MessageSquare, Users, RefreshCw, AlertCircle, CheckCircle, Zap, RotateCcw, Clock, Info, Play, Pause, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -57,6 +57,13 @@ export default function BulkMessage() {
   const [useRotation, setUseRotation] = useState(false);
   const [useAI, setUseAI] = useState(false);
   const [messageDelaySeconds, setMessageDelaySeconds] = useState(1);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [polling, setPolling] = useState(false);
+  const pollingInterval = useRef<NodeJS.Timeout | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelled, setCancelled] = useState(false);
+  const [jobFinished, setJobFinished] = useState(false);
+  let lastResultLength = useRef<number>(0);
 
   // Kullanıcı sayısını hesapla (her satır bir kişi)
   const getUserCount = () => {
@@ -129,6 +136,8 @@ export default function BulkMessage() {
     }
     setLoading(true);
     setResults(null);
+    setJobId(null);
+    setPolling(false);
     try {
       let payload: any = {
         phone_list_text: phoneListText,
@@ -140,23 +149,105 @@ export default function BulkMessage() {
         is_rotation_enabled: useRotation ? 'true' : 'false',
         is_ai_enabled: useAI ? 'true' : 'false',
         message_delay_seconds: messageDelaySeconds,
+        background:true
       };
       const response = await authenticatedFetch('/send-text-multiple', {
         method: 'POST',
         body: JSON.stringify(payload)
       });
       const data = await response.json().catch(() => ({}));
-      setResults({ ok: response.ok, data });
-      if (!response.ok) {
-        alert(data.message || 'Toplu mesaj gönderilemedi');
+      if (response.ok && data.job_id) {
+        setJobId(data.job_id);
+        setPolling(true);
+        // setLoading(true); // loading zaten true
+      } else {
+        setResults({ ok: false, data: { message: data.message || 'Job başlatılamadı' } });
+        setLoading(false);
       }
     } catch (error) {
       setResults({ ok: false, data: { message: 'Bağlantı hatası' } });
-      alert('Bağlantı hatası');
-    } finally {
       setLoading(false);
     }
   };
+
+  // Polling logic for job status
+  useEffect(() => {
+    if (jobId && polling) {
+      const fetchJobStatus = async () => {
+        try {
+          const res = await authenticatedFetch(`/job-status/${jobId}`);
+          const data = await res.json().catch(() => ({}));
+          setResults({
+            ok: data.status === 'completed',
+            data: data.result || [],
+            status: data.status,
+            current_count: data.current_count,
+            total_count: data.total_count,
+            finished: data.finished,
+          });
+          if (data.finished) {
+            setJobFinished(true);
+            setPolling(false);
+            setLoading(false);
+            setJobId(null);
+            if (pollingInterval.current) {
+              clearInterval(pollingInterval.current);
+              pollingInterval.current = null;
+            }
+          }
+        } catch (err) {
+          setResults({ ok: false, data: { message: 'Job durumu alınamadı' } });
+          setPolling(false);
+          setLoading(false);
+          setJobId(null);
+          if (pollingInterval.current) {
+            clearInterval(pollingInterval.current);
+            pollingInterval.current = null;
+          }
+        }
+      };
+      fetchJobStatus();
+      const intervalMs = Math.max(2000, Math.min(10000, messageDelaySeconds * 1000));
+      pollingInterval.current = setInterval(fetchJobStatus, intervalMs);
+      return () => {
+        if (pollingInterval.current) {
+          clearInterval(pollingInterval.current);
+          pollingInterval.current = null;
+        }
+      };
+    }
+    return () => {
+      if (pollingInterval.current) {
+        clearInterval(pollingInterval.current);
+        pollingInterval.current = null;
+      }
+    };
+  }, [jobId, polling, messageDelaySeconds]);
+
+  // Cancel job fonksiyonu
+  const handleCancelJob = async () => {
+    if (!jobId) return;
+    setCancelling(true);
+    try {
+      await authenticatedFetch(`/job-cancel/${jobId}`, { method: 'POST' });
+      setCancelled(true);
+      setCancelling(false);
+      // Polling devam edecek, sadece cancelled state güncellendi
+    } catch (err) {
+      setCancelling(false);
+      // Hata mesajı gösterilebilir
+    }
+  };
+
+  // Komponent unmount olursa polling'i temizle
+  useEffect(() => {
+    return () => {
+      if (pollingInterval.current) {
+        clearInterval(pollingInterval.current);
+        pollingInterval.current = null;
+      }
+    };
+  }, []);
 
   // Gönderimi duraklat/devam ettir
   const togglePause = () => {
@@ -475,19 +566,49 @@ export default function BulkMessage() {
         {/* Sağ Panel - Sonuçlar ve İstatistikler */}
         <div className="space-y-6">
           {/* Progress Bar */}
-          {loading && (
+          {(loading || (results && typeof results.current_count === 'number' && typeof results.total_count === 'number')) && (
             <Card>
               <CardContent className="pt-6">
                 <div className="space-y-3">
-                  <div className="flex justify-between text-sm">
+                  <div className="flex justify-between text-sm items-center">
                     <span>İlerleme</span>
-                    <span>0%</span>
+                    <span>
+                      {typeof results?.current_count === 'number' && typeof results?.total_count === 'number'
+                        ? `${Math.round((results.current_count / results.total_count) * 100)}%`
+                        : '0%'}
+                    </span>
+                    {/* Cancel butonu */}
+                    {jobId && !cancelled && !cancelling && !jobFinished && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="ml-4 text-red-600 border-red-200"
+                        onClick={handleCancelJob}
+                        disabled={cancelling}
+                      >
+                        İptal Et
+                      </Button>
+                    )}
+                    {cancelling && (
+                      <span className="ml-4 text-yellow-600 flex items-center"><RefreshCw className="h-4 w-4 animate-spin mr-1" /> İptal ediliyor...</span>
+                    )}
+                    {cancelled && !jobFinished && (
+                      <span className="ml-4 text-gray-600">İşlem iptal edildi. Son gönderilen mesajlar birkaç saniye içinde görünebilir.</span>
+                    )}
+                    {jobFinished && (
+                      <span className="ml-4 text-green-600">İşlem tamamen sonlandı.</span>
+                    )}
                   </div>
-                  <Progress value={0} className="h-3" />
+                  <Progress value={
+                    typeof results?.current_count === 'number' && typeof results?.total_count === 'number'
+                      ? (results.current_count / results.total_count) * 100
+                      : 0
+                  } className="h-3" />
                   <div className="flex justify-between text-xs text-gray-600">
-                    {/* currentSendingIndex and estimatedTimeLeft are removed */}
+                    {typeof results?.current_count === 'number' && typeof results?.total_count === 'number' && (
+                      <span>{results.current_count} / {results.total_count} tamamlandı</span>
+                    )}
                   </div>
-                  {/* isPaused and togglePause are removed */}
                 </div>
               </CardContent>
             </Card>
@@ -539,6 +660,7 @@ export default function BulkMessage() {
                     {Array.isArray(results.data) && results.data.length > 0 ? (
                       results.data.map((result: any, index: number) => {
                         // Telefon numarası
+                        console.log(result);
                         let phone = '';
                         if (result._data?.Info?.Chat) {
                           phone = result._data.Info?.Chat.replace(/@.*/, '');
@@ -550,18 +672,15 @@ export default function BulkMessage() {
                         } else if (result.from && typeof result.from === 'string') {
                           phone = result.to.replace(/@.*/, '');
                         }
-                        // Başarı durumu
-                        let isSuccess = false;
-                        if (result.error) isSuccess = false;
-                        else if (results.ok) isSuccess = true;
-                        else if (result._data?.Info?.IsFromMe === true) isSuccess = true;
-                        else isSuccess = false;
+                        // Başarı durumu ve kart rengi
+                        let status: 'success' | 'pending' | 'error' = 'pending';
+                        if (result.error) status = 'error';
+                        else if (results.job_status === 'completed') status = 'success';
+                        else status = 'pending';
                         // Mesaj içeriği
-                        let text = result._data?.Message?.extendedTextMessage?.text || '';
-                        // Eğer hata varsa ve error stringi içinde request.body.text varsa onu göster
-                        if (!isSuccess && result.error) {
+                        let text = result._data?.body|| '';
+                        if (status === 'error' && result.error) {
                           try {
-                            // error stringi içinde ilk { ile başlayan JSON'u bul
                             const jsonStart = result.error.indexOf('{');
                             if (jsonStart !== -1) {
                               const jsonStr = result.error.slice(jsonStart);
@@ -570,21 +689,20 @@ export default function BulkMessage() {
                                 text = parsed.request.body.text;
                               }
                             }
-                          } catch (e) {
-                            // JSON parse hatası olursa mevcut text'i kullanmaya devam et
-                          }
+                          } catch (e) {}
                         }
                         // Zaman
                         let timestamp = '';
-                        if (result._data?.Info?.Timestamp) {
+                        if (result._data?.t) {
+                          try {
+                            const d = new Date(result._data.t * 1000);
+                            timestamp = d.toLocaleString('tr-TR');
+                          } catch {}
+                        } else if (result._data?.Info?.Timestamp) {
                           try {
                             const d = new Date(result._data.Info.Timestamp);
                             timestamp = d.toLocaleString('tr-TR');
                           } catch {}
-                        }
-                        // Hata varsa logla
-                        if (!isSuccess && result.error) {
-                          console.log('Gönderim hatası:', result.error);
                         }
                         // Sender (gönderici) numarası
                         let sender = '';
@@ -596,14 +714,26 @@ export default function BulkMessage() {
                         } else if (result.from && typeof result.from === 'string') {
                           sender = result.from.replace(/@.*/, '');
                         }
+                        // Kart durumu ve ikonunu result.status'a göre belirle
+                        let cardClass = '';
+                        let icon = null;
+                        if (result.job_status === 'completed') {
+                          cardClass = 'bg-green-50 border-green-200';
+                          icon = <CheckCircle className="h-5 w-5 text-green-600" />;
+                        } else if (result.job_status === 'pending') {
+                          cardClass = 'bg-yellow-50 border-yellow-200';
+                          icon = <RefreshCw className="h-5 w-5 text-yellow-600 animate-spin" />;
+                        } else if (result.job_status === 'error') {
+                          cardClass = 'bg-red-50 border-red-200';
+                          icon = <AlertCircle className="h-5 w-5 text-red-600" />;
+                        } else {
+                          cardClass = 'bg-gray-50 border-gray-200';
+                          icon = <Info className="h-5 w-5 text-gray-400" />;
+                        }
                         return (
-                          <div key={index} className={`flex items-center space-x-3 p-3 border rounded-lg ${isSuccess ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+                          <div key={index} className={`flex items-center space-x-3 p-3 border rounded-lg ${cardClass}`}>
                             <div className="flex-shrink-0">
-                              {isSuccess ? (
-                                <CheckCircle className="h-5 w-5 text-green-600" />
-                              ) : (
-                                <AlertCircle className="h-5 w-5 text-red-600" />
-                              )}
+                              {icon}
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center space-x-2">

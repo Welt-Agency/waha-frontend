@@ -174,10 +174,18 @@ export default function Employees() {
     console.log('Çalışan durumu değiştiriliyor:', employeeId, newStatus);
   };
 
-  // handleDeleteEmployee fonksiyonunu koru
-  const handleDeleteEmployee = (employeeId: string) => {
-    // API çağrısı burada yapılacak
-    console.log('Çalışan siliniyor:', employeeId);
+  // handleDeleteEmployee fonksiyonunu güncelle
+  const handleDeleteEmployee = async (employeeId: string) => {
+    // Yeni admin endpointine DELETE isteği gönder
+    try {
+      const res = await authenticatedFetch(`/company/users/${employeeId}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) throw new Error('Çalışan silinemedi');
+      await fetchData();
+    } catch (err) {
+      alert('Çalışan silinemedi!');
+    }
   };
 
   // Filtreleme
@@ -426,7 +434,7 @@ export default function Employees() {
                         <AlertDialogFooter>
                           <AlertDialogCancel>İptal</AlertDialogCancel>
                           <AlertDialogAction 
-                            onClick={() => handleDeleteEmployee(employee.id)}
+                            onClick={() => handleDeleteEmployee(employee.user_id)}
                             className="bg-red-600 hover:bg-red-700"
                           >
                             Sil

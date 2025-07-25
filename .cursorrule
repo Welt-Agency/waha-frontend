@@ -1,0 +1,25 @@
+# .cursorrule - WAHA Frontend v2
+
+## Routing & Authentication Kuralları
+
+1. **Login Sayfası Public**: `/login` (veya `/` ana sayfa) public olarak erişilebilir olmalı. Kullanıcı login olmadan diğer sayfalara erişemez.
+2. **ProtectedRoute**: Login harici tüm sayfalar `ProtectedRoute` component'i altında olmalı. Kullanıcı login değilse otomatik olarak login sayfasına yönlendirilir.
+3. **Kullanıcı Tipine Göre Yönlendirme**: Login sonrası kullanıcı tipi (dev-user, company admin, regular user) kontrol edilir ve uygun dashboard'a yönlendirilir:
+   - `dev → `/admin` (veya admin dashboard)
+   - `admin` → `/dashboard` (veya şirket admin paneli)
+   - `normal` → `/inbox` (veya kullanıcı ana ekranı)
+4. **Kullanıcı Bilgisi**: Kullanıcı tipi ve authentication state'i global bir context veya state management ile tutulmalı. (örn. React Context, Zustand, vs.)
+5. **Sunucu Tarafı Koruma**: Gerekirse Next.js middleware ile route-level koruma uygulanabilir.
+6. **Çoklu Tenant Güvenliği**: Kullanıcılar sadece kendi şirket verilerine erişebilmeli. Dev-user tüm verilere erişebilir.
+
+> Bu dosya, proje boyunca alınan önemli mimari kararlar ve kurallar için güncellenmelidir. 
+
+# WAHA Frontend v2 State Management Rule
+
+- Session ve sessionCountInfo state'i merkezi olarak Zustand store (hooks/useSessionStore.ts) ile yönetilir.
+- SessionManager, ConversationInbox ve diğer ilgili component'ler session bilgisini doğrudan store'dan okur.
+- SessionManager ilk yüklemede ve session ekleme/çıkarma işlemlerinde store'u günceller.
+- Session ile ilgili API'den veri çekme işlemleri sadece store'da yapılır, component'ler tekrar tekrar fetch yapmaz.
+- Session objesinde label alanı yoktur, session adı için session.me?.pushName || session.name kullanılır.
+- Yeni bir sayfa veya component session bilgisine ihtiyaç duyarsa, doğrudan Zustand store'dan okur.
+- Bu yapı ile gereksiz API çağrıları ve state tekrarları engellenir, uygulama daha hızlı ve tutarlı çalışır. 

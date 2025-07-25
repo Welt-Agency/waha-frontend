@@ -14,12 +14,11 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { LoginResponse } from '@/lib/auth';
+import Link from 'next/link';
 
 interface SidebarProps {
-  activeTab: string;
-  setActiveTab: (tab: string) => void;
   closeSidebar: () => void;
-  user?: LoginResponse | null;
+  user?: any;
   onLogout?: () => void;
 }
 
@@ -32,7 +31,7 @@ const menuItems = [
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
-export default function Sidebar({ activeTab, setActiveTab, closeSidebar, user, onLogout }: SidebarProps) {
+export default function Sidebar({ closeSidebar, user, onLogout }: SidebarProps) {
   const isAdmin = user?.user_type === 'admin';
 
   return (
@@ -68,22 +67,19 @@ export default function Sidebar({ activeTab, setActiveTab, closeSidebar, user, o
 
           const Icon = item.icon;
           return (
-            <button
+            <Link
               key={item.id}
-              onClick={() => {
-                setActiveTab(item.id);
-                closeSidebar();
-              }}
+              href={`/dashboard/${item.id}`}
+              onClick={closeSidebar}
               className={cn(
                 "w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-left transition-all duration-200",
-                activeTab === item.id
-                  ? "bg-[#064e44] text-white shadow-lg"
-                  : "text-green-100 hover:bg-[#064e44] hover:text-white"
+                // Aktif route kontrolü burada yapılabilir (isteğe bağlı)
+                "text-green-100 hover:bg-[#064e44] hover:text-white"
               )}
             >
               <Icon className="h-5 w-5" />
               <span className="font-medium">{item.label}</span>
-            </button>
+            </Link>
           );
         })}
       </nav>

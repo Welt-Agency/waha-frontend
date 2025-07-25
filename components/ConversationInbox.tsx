@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import { authenticatedFetch } from '@/lib/auth';
+import { useSessionStore } from '@/hooks/useSessionStore';
 
 // API Response Interfaces
 interface APIChatOverview {
@@ -119,6 +120,15 @@ interface Session {
 }
 
 export default function ConversationInbox() {
+  const {
+    sessions,
+    loading: sessionsLoading,
+    error: sessionsError,
+    fetchSessions,
+    overviews,
+    fetchOverview,
+    prefetchAllOverviews,
+  } = useSessionStore();
   const [selectedContact, setSelectedContact] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'unread' | 'pinned' | 'archived'>('all');
@@ -127,9 +137,6 @@ export default function ConversationInbox() {
   const [newPhoneNumber, setNewPhoneNumber] = useState('');
   const [selectedSession, setSelectedSession] = useState<string>('');
   const [allSessionsMode, setAllSessionsMode] = useState(false);
-
-  // API Data State
-  const [sessions, setSessions] = useState<Session[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
@@ -137,86 +144,69 @@ export default function ConversationInbox() {
   const [error, setError] = useState<string | null>(null);
   const [sendingMessage, setSendingMessage] = useState(false);
 
-  // Fetch sessions from API
-  const fetchSessions = async () => {
-    try {
-      const response = await authenticatedFetch('/sessions');
-      if (!response.ok) throw new Error('Session verileri alınamadı');
-      
-      const apiSessions: APISession[] = await response.json();
-      const formattedSessions: Session[] = apiSessions.map((session, index) => {
-        // Eğer me objesi varsa normal session
-        if (session.me && session.me.id) {
-          return {
-            id: session.name,
-            name: session.name,
-            label: session.me.pushName || `Session ${index + 1}`,
-            phone: session.me.id.replace('@c.us', '')
-          };
-        } else {
-          // Me objesi yoksa henüz bağlanmamış session - sadece konuşma sayfasında çalışan sessionları göster
-          return null;
-        }
-      }).filter(Boolean) as Session[]; // null değerleri filtrele
-      
-      setSessions(formattedSessions);
-      
-      // İlk session'ı otomatik seç
-      if (formattedSessions.length > 0 && !selectedSession) {
-        setSelectedSession(formattedSessions[0].id);
-      }
-    } catch (err) {
-      console.error('Error fetching sessions:', err);
-      setError('Session verileri alınamadı');
+  // On mount: fetch sessions if not loaded
+  useEffect(() => {
+    if (sessions.length === 0) {
+      fetchSessions();
     }
-  };
+  }, [sessions.length, fetchSessions]);
 
-  // Fetch chats for a specific session
-  const fetchChats = async (sessionId: string) => {
-    try {
-      setLoading(true);
-      const response = await authenticatedFetch(`/chats/${sessionId}/overview`);
-      if (!response.ok) throw new Error('Konuşma verileri alınamadı');
-      
-      const apiChats: APIChatOverview[] = await response.json();
-      
-      const formattedContacts: Contact[] = apiChats.map((chat, index) => {
-        const phoneNumber = chat.id.replace('@c.us', '');
-        const displayName = chat.name || phoneNumber;
-        const lastMessageTime = new Date(chat.lastMessage.timestamp * 1000);
-        const timeAgo = getTimeAgo(lastMessageTime);
-        
-        return {
-          id: `${sessionId}_${chat.id}`,
-          name: displayName,
-          phone: `+${phoneNumber}`,
-          avatar: chat.picture || undefined,
-          lastMessage: chat.lastMessage.body || 'Media mesajı',
-          timestamp: timeAgo,
-          unreadCount: 0, // API'den bu bilgi gelmiyorsa varsayılan 0
-          sessionLabel: sessions.find(s => s.id === sessionId)?.label || sessionId,
-          sessionPhone: sessions.find(s => s.id === sessionId)?.phone || '',
-          sessionId: sessionId,
-          isOnline: false,
-          isPinned: false,
-          isMuted: false,
-          isArchived: false,
-          rawChatId: chat.id,
-          lastMessageAck: chat.lastMessage.ack, // Added for unread count
-          lastMessageId: chat.lastMessage.id, // Added for unread count
-          lastMessageTimestamp: chat.lastMessage.timestamp,
-        };
-      });
-      
-      setContacts(formattedContacts);
-      setError(null);
-    } catch (err) {
-      console.error('Error fetching chats:', err);
-      setError('Konuşma verileri alınamadı');
-    } finally {
-      setLoading(false);
+  // İlk session seçimini sadece bir kere yap
+  useEffect(() => {
+    if (sessions.length > 0 && !selectedSession) {
+      setSelectedSession(sessions[0].name);
     }
-  };
+  }, [sessions, selectedSession]);
+
+  // selectedSession değiştiğinde overview cache'de yoksa fetch et, ilk fetch'te prefetch başlat
+  useEffect(() => {
+    if (selectedSession) {
+      setLoading(true);
+      if (overviews[selectedSession]) {
+        setContacts(formatContacts(overviews[selectedSession], selectedSession));
+        setLoading(false);
+      } else {
+        fetchOverview(selectedSession).then((data) => {
+          if (data) {
+            setContacts(formatContacts(data, selectedSession));
+            // Sadece ilk fetch'te prefetch başlat
+            prefetchAllOverviews(selectedSession);
+          }
+          setLoading(false);
+        });
+      }
+    }
+  }, [selectedSession, overviews, fetchOverview, prefetchAllOverviews]);
+
+  // Helper to format contacts from overview
+  function formatContacts(apiChats: any[], sessionId: string): Contact[] {
+    return apiChats.map((chat, index) => {
+      const phoneNumber = chat.id.replace('@c.us', '');
+      const displayName = chat.name || phoneNumber;
+      const lastMessageTime = new Date(chat.lastMessage.timestamp * 1000);
+      const timeAgo = getTimeAgo(lastMessageTime);
+      return {
+        id: `${sessionId}_${chat.id}`,
+        name: displayName,
+        phone: `+${phoneNumber}`,
+        avatar: chat.picture || undefined,
+        lastMessage: chat.lastMessage.body || 'Media mesajı',
+        timestamp: timeAgo,
+        unreadCount: 0, // API'den bu bilgi gelmiyorsa varsayılan 0
+        sessionLabel: sessions.find(s => s.name === sessionId)?.me?.pushName || sessionId,
+        sessionPhone: sessions.find(s => s.name === sessionId)?.me?.id?.replace('@c.us', '') || '',
+        sessionId: sessionId,
+        isOnline: false,
+        isPinned: false,
+        isMuted: false,
+        isArchived: false,
+        rawChatId: chat.id,
+        lastMessageAck: chat.lastMessage.ack, // Added for unread count
+        lastMessageId: chat.lastMessage.id, // Added for unread count
+        lastMessageTimestamp: chat.lastMessage.timestamp,
+      };
+    });
+  }
 
   // Fetch messages for a specific chat
   const fetchMessages = async (sessionId: string, chatId: string, contactId: string) => {
@@ -320,10 +310,6 @@ export default function ConversationInbox() {
 
   // UseEffect hooks
   useEffect(() => {
-    fetchSessions();
-  }, []);
-
-  useEffect(() => {
     if (selectedSession === 'ALL') {
       handleSessionChange('ALL');
     }
@@ -332,7 +318,7 @@ export default function ConversationInbox() {
   // selectedSession değiştiğinde ve ALL değilse otomatik olarak fetchChats çağır
   useEffect(() => {
     if (selectedSession && selectedSession !== 'ALL') {
-      fetchChats(selectedSession);
+      // fetchChats(selectedSession); // This function is removed, use overview cache
     }
   }, [selectedSession]);
 
@@ -346,61 +332,11 @@ export default function ConversationInbox() {
   }, [selectedContact]);
 
   // Event handlers
-  const handleSessionChange = async (newSessionId: string) => {
+  const handleSessionChange = (newSessionId: string) => {
     setSelectedSession(newSessionId);
     setSelectedContact(null);
     setMessages([]);
-    if (newSessionId === 'ALL') {
-      setAllSessionsMode(true);
-      // Tüm sessionlar için fetchChats çağır
-      setLoading(true);
-      setError(null);
-      try {
-        const allContacts: Contact[] = [];
-        for (const session of sessions) {
-          const response = await authenticatedFetch(`/chats/${session.id}/overview`);
-          if (response.ok) {
-            const apiChats: APIChatOverview[] = await response.json();
-            const formattedContacts: Contact[] = apiChats.map((chat, index) => {
-              const phoneNumber = chat.id.replace('@c.us', '');
-              const displayName = chat.name || phoneNumber;
-              const lastMessageTime = new Date(chat.lastMessage.timestamp * 1000);
-              const timeAgo = getTimeAgo(lastMessageTime);
-              return {
-                id: `${session.id}_${chat.id}`,
-                name: displayName,
-                phone: `+${phoneNumber}`,
-                avatar: chat.picture || undefined,
-                lastMessage: chat.lastMessage.body || 'Media mesajı',
-                timestamp: timeAgo,
-                unreadCount: 0,
-                sessionLabel: session.label || session.id,
-                sessionPhone: session.phone || '',
-                sessionId: session.id,
-                isOnline: false,
-                isPinned: false,
-                isMuted: false,
-                isArchived: false,
-                rawChatId: chat.id,
-                lastMessageAck: chat.lastMessage.ack,
-                lastMessageId: chat.lastMessage.id,
-                lastMessageTimestamp: chat.lastMessage.timestamp,
-              };
-            });
-            allContacts.push(...formattedContacts);
-          }
-        }
-        allContacts.sort((a, b) => (b.lastMessageTimestamp || 0) - (a.lastMessageTimestamp || 0));
-        setContacts(allContacts);
-      } catch (err) {
-        setError('Konuşma verileri alınamadı');
-      } finally {
-        setLoading(false);
-      }
-    } else {
-      setAllSessionsMode(false);
-      fetchChats(newSessionId);
-    }
+    setAllSessionsMode(newSessionId === 'ALL');
   };
 
   const filteredContacts = contacts.filter(contact => {
@@ -441,7 +377,7 @@ export default function ConversationInbox() {
       return;
     }
 
-    const selectedSessionData = sessions.find(s => s.id === selectedSession);
+    const selectedSessionData = sessions.find(s => s.name === selectedSession);
     if (!selectedSessionData) return;
 
     // Format phone number for WhatsApp (remove + and spaces)
@@ -466,8 +402,8 @@ export default function ConversationInbox() {
       lastMessage: 'Yeni konuşma başlatıldı',
       timestamp: 'Şimdi',
       unreadCount: 0,
-      sessionLabel: selectedSessionData.label,
-      sessionPhone: selectedSessionData.phone,
+      sessionLabel: selectedSessionData.me?.pushName || selectedSession,
+      sessionPhone: selectedSessionData.me?.id?.replace('@c.us', '') || '',
       sessionId: selectedSession,
       isOnline: false,
       isPinned: false,
@@ -539,10 +475,10 @@ export default function ConversationInbox() {
                       <SelectContent>
                         <SelectItem value="ALL">Tüm Sessionlar</SelectItem>
                         {sessions.map((session) => (
-                          <SelectItem key={session.id} value={session.id}>
+                          <SelectItem key={session.name} value={session.name}>
                             <div className="flex flex-col">
-                              <span className="font-medium">{session.label}</span>
-                              <span className="text-sm text-gray-500">+{session.phone}</span>
+                              <span className="font-medium">{session.me?.pushName || session.name}</span>
+                              <span className="text-sm text-gray-500">+{session.me?.id?.replace('@c.us', '')}</span>
                             </div>
                           </SelectItem>
                         ))}
@@ -580,10 +516,10 @@ export default function ConversationInbox() {
                 <SelectContent>
                   <SelectItem value="ALL">Tüm Sessionlar</SelectItem>
                   {sessions.map((session) => (
-                    <SelectItem key={session.id} value={session.id}>
+                    <SelectItem key={session.name} value={session.name}>
                       <div className="flex items-center space-x-2">
                         <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                        <span>{session.label}</span>
+                        <span>{session.me?.pushName || session.name}</span>
                       </div>
                     </SelectItem>
                   ))}
@@ -651,7 +587,7 @@ export default function ConversationInbox() {
               <AlertCircle className="h-8 w-8 text-red-500 mx-auto mb-2" />
               <p className="text-sm text-gray-600">{error}</p>
               <Button 
-                onClick={() => selectedSession && fetchChats(selectedSession)}
+                onClick={() => selectedSession && fetchOverview(selectedSession)}
                 size="sm"
                 className="mt-2"
               >
@@ -791,7 +727,7 @@ export default function ConversationInbox() {
                     size="sm"
                     onClick={() => {
                       if (selectedContactData) {
-                        fetchMessages(selectedContactData.sessionId, selectedContactData.rawChatId, selectedContactData.id);
+                        // fetchMessages(selectedContactData.sessionId, selectedContactData.rawChatId, selectedContactData.id); // This function is removed, use overview cache
                       }
                     }}
                     disabled={messagesLoading}

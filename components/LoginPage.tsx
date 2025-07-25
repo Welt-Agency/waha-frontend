@@ -5,6 +5,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { MessageSquare, Lock, Mail, Eye, EyeOff } from 'lucide-react';
 import { LoginResponse, authenticatedFetchCustom, getAuthBaseUrl, getBaseUrl } from '@/lib/auth';
+import { useRouter } from 'next/navigation';
 
 interface LoginPageProps {
   onLogin: (authData: LoginResponse) => void;
@@ -16,6 +17,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

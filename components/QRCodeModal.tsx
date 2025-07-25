@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { QrCode, RefreshCw, Clock, Smartphone, AlertCircle, CheckCircle } from 'lucide-react';
 import { authenticatedFetch } from '@/lib/auth';
+import { useSessionStore } from '@/hooks/useSessionStore';
 
 interface QRCodeModalProps {
   open: boolean;
@@ -39,6 +40,10 @@ export default function QRCodeModal({ open, onOpenChange, onSessionAdded, existi
   
   const statusCheckInterval = useRef<NodeJS.Timeout | null>(null);
   const qrRefreshInterval = useRef<NodeJS.Timeout | null>(null);
+
+  const session = useSessionStore(state =>
+    existingSessionId ? state.sessions.find(s => s.name === existingSessionId) : undefined
+  );
 
   // Modal açılırken mevcut session varsa direkt QR'a geç
   useEffect(() => {
@@ -87,7 +92,7 @@ export default function QRCodeModal({ open, onOpenChange, onSessionAdded, existi
       setSessionName(trimmedLabel);
 
       // Create new session
-      const sessionResponse = await authenticatedFetch('/sessions', {
+      const sessionResponse = await authenticatedFetch('/sessions/', {
         method: 'POST',
         body: JSON.stringify({
           name: trimmedLabel, // Artık kullanıcıdan alınan isim
@@ -244,6 +249,15 @@ export default function QRCodeModal({ open, onOpenChange, onSessionAdded, existi
       };
     }
   }, [step, sessionName]);
+
+  // WebSocket ile status değişimini dinle
+  useEffect(() => {
+    if (session && session.status === 'WORKING') {
+      // Modalı kapat ve success işlemi yap
+      if (onSessionAdded) onSessionAdded(session);
+      if (onOpenChange) onOpenChange(false);
+    }
+  }, [session, onSessionAdded, onOpenChange]);
 
   const refreshQRCode = async () => {
     if (sessionName) {

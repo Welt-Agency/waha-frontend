@@ -14,6 +14,7 @@ export default function SessionManager() {
   const error = useSessionStore(state => state.error);
   const fetchSessions = useSessionStore(state => state.fetchSessions);
   const subscribeToSessionStatus = useSessionStore(state => state.subscribeToSessionStatus);
+  const subscribeToChatOverview = useSessionStore(state => state.subscribeToChatOverview);
 
   // QR modal state
   const [showQRModal, setShowQRModal] = useState(false);
@@ -29,10 +30,12 @@ export default function SessionManager() {
 
   useEffect(() => {
     if (!loading && sessions.length > 0 && !websocketStarted) {
+      console.log('Starting websockets for sessions:', sessions.map(s => s.name));
       subscribeToSessionStatus();
+      subscribeToChatOverview();
       setWebsocketStarted(true);
     }
-  }, [loading, sessions, subscribeToSessionStatus, websocketStarted]);
+  }, [loading, sessions, subscribeToSessionStatus, subscribeToChatOverview, websocketStarted]);
 
   // Handler fonksiyonları
   const handleRemove = async (sessionId: string) => {

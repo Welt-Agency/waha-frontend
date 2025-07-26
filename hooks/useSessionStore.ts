@@ -24,6 +24,26 @@ export interface APIChatOverview {
   _chat: any;
 }
 
+export interface APIMessage {
+  id: string;
+  timestamp: number;
+  from: string;
+  fromMe: boolean;
+  source: string;
+  to: string;
+  participant: string | null;
+  body: string;
+  hasMedia: boolean;
+  media: any;
+  ack: number;
+  ackName: string;
+  author: string;
+  location: any;
+  vCards: string[];
+  _data: any;
+  replyTo: any;
+}
+
 interface SessionCountInfo {
   session_limit: number;
   count: number;
@@ -35,12 +55,19 @@ interface SessionStoreState {
   loading: boolean;
   error: string | null;
   overviews: { [sessionId: string]: APIChatOverview[] };
+  messages: { [chatId: string]: APIMessage[] };
+  websocket: WebSocket | null;
+  chatWebsocket: WebSocket | null;
   fetchSessions: () => Promise<void>;
   setSessions: (sessions: APISession[]) => void;
   setSessionCountInfo: (info: SessionCountInfo) => void;
   fetchOverview: (sessionId: string) => Promise<APIChatOverview[] | undefined>;
   prefetchAllOverviews: (excludeSessionId?: string) => Promise<void>;
   subscribeToSessionStatus: () => void;
+  subscribeToChatOverview: () => void;
+  updateOverview: (sessionId: string, chatOverview: APIChatOverview) => void;
+  addMessage: (chatId: string, message: APIMessage) => void;
+  updateMessageStatus: (chatId: string, messageId: string, ack: number) => void;
 }
 
 export const useSessionStore = create<SessionStoreState>((set, get) => {
@@ -52,6 +79,9 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
     loading: false,
     error: null,
     overviews: {},
+    messages: {},
+    websocket: null,
+    chatWebsocket: null,
     fetchSessions: async () => {
       set({ loading: true, error: null });
       try {
@@ -98,10 +128,16 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
       await prefetch();
     },
     subscribeToSessionStatus: () => {
+      const { websocket } = get();
+      if (websocket) {
+        websocket.close();
+      }
+      
       const ws = new WebSocket('ws://localhost:8001/api/v1/ws/session-status');
-      console.log('WebSocket opened');
+      console.log('Session Status WebSocket opened');
+      
       ws.onopen = () => {
-        console.log('WebSocket bağlantısı açıldı');
+        console.log('Session Status WebSocket bağlantısı açıldı');
         // Mevcut session'lara subscribe ol
         const sessions = get().sessions;
         sessions.forEach((session) => {
@@ -109,6 +145,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
           console.log('Subscribed to session:', session.name);
         });
       };
+      
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
@@ -166,12 +203,282 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
           // ignore parse errors
         }
       };
+      
       ws.onerror = (e) => {
-        set({ error: 'WebSocket bağlantı hatası' });
+        set({ error: 'Session Status WebSocket bağlantı hatası' });
       };
+      
       ws.onclose = () => {
         // İsteğe bağlı: Otomatik reconnect veya kullanıcıya bilgi verilebilir
       };
+      
+      set({ websocket: ws });
+    },
+    subscribeToChatOverview: () => {
+      const { chatWebsocket } = get();
+      if (chatWebsocket) {
+        chatWebsocket.close();
+      }
+      
+      const ws = new WebSocket('ws://localhost:8001/api/v1/ws/chat-overview');
+      console.log('Chat Overview WebSocket opened');
+      
+      ws.onopen = () => {
+        console.log('Chat Overview WebSocket bağlantısı açıldı');
+        // Mevcut session'lara subscribe ol
+        const sessions = get().sessions;
+        sessions.forEach((session) => {
+          ws.send(JSON.stringify({ action: 'subscribe', session: session.name }));
+          console.log('Subscribed to chat overview for session:', session.name);
+        });
+      };
+      
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          console.log('Chat Overview WebSocket received:', data);
+          
+          // Chat overview güncellemeleri
+          if (data.event === 'chat.overview' && data.session && data.chat) {
+            const { session, chat } = data;
+            const { overviews } = get();
+            
+            if (overviews[session]) {
+              const updatedOverviews = [...overviews[session]];
+              const existingIndex = updatedOverviews.findIndex(c => c.id === chat.id);
+              
+              if (existingIndex !== -1) {
+                // Mevcut chat'i güncelle
+                updatedOverviews[existingIndex] = chat;
+              } else {
+                // Yeni chat ekle
+                updatedOverviews.unshift(chat);
+              }
+              
+              set({ 
+                overviews: { 
+                  ...overviews, 
+                  [session]: updatedOverviews 
+                } 
+              });
+            }
+            return;
+          }
+          
+          // Webhook message event'i - yeni mesaj geldiğinde
+          if (data.event === 'message' && data.session && data.payload) {
+            const { session, payload, me } = data;
+            const { overviews, messages } = get();
+            
+            // Mesaj verilerini hazırla
+            const message: APIMessage = {
+              id: payload.id,
+              timestamp: payload.timestamp,
+              from: payload.from,
+              fromMe: payload.fromMe,
+              source: payload.source,
+              to: payload.to,
+              participant: null,
+              body: payload.body,
+              hasMedia: payload.hasMedia,
+              media: payload.media,
+              ack: payload.ack,
+              ackName: payload.ackName,
+              author: payload.from,
+              location: null,
+              vCards: payload.vCards || [],
+              _data: payload._data,
+              replyTo: null
+            };
+            
+            // Chat ID'yi oluştur (fromMe'ye göre)
+            const chatId = payload.fromMe ? payload.to : payload.from;
+            
+            // Overview'ı güncelle
+            if (overviews[session]) {
+              const updatedOverviews = [...overviews[session]];
+              const existingIndex = updatedOverviews.findIndex(c => c.id === chatId);
+              
+              if (existingIndex !== -1) {
+                // Chat'i en üste taşı ve son mesajı güncelle
+                const updatedChat = {
+                  ...updatedOverviews[existingIndex],
+                  lastMessage: {
+                    id: payload.id,
+                    timestamp: payload.timestamp,
+                    from: payload.from,
+                    fromMe: payload.fromMe,
+                    source: payload.source,
+                    body: payload.body,
+                    to: payload.to,
+                    participant: null,
+                    hasMedia: payload.hasMedia,
+                    media: payload.media,
+                    ack: payload.ack,
+                    ackName: payload.ackName,
+                    replyTo: null,
+                    _data: payload._data
+                  }
+                };
+                updatedOverviews.splice(existingIndex, 1);
+                updatedOverviews.unshift(updatedChat);
+                
+                set({ 
+                  overviews: { 
+                    ...overviews, 
+                    [session]: updatedOverviews 
+                  } 
+                });
+              } else {
+                // Yeni chat oluştur
+                const newChat: APIChatOverview = {
+                  id: chatId,
+                  name: null, // Backend'den gelecek
+                  picture: null, // Backend'den gelecek
+                  lastMessage: {
+                    id: payload.id,
+                    timestamp: payload.timestamp,
+                    from: payload.from,
+                    fromMe: payload.fromMe,
+                    source: payload.source,
+                    body: payload.body,
+                    to: payload.to,
+                    participant: null,
+                    hasMedia: payload.hasMedia,
+                    media: payload.media,
+                    ack: payload.ack,
+                    ackName: payload.ackName,
+                    replyTo: null,
+                    _data: payload._data
+                  },
+                  _chat: {
+                    id: chatId,
+                    name: null,
+                    conversationTimestamp: payload.timestamp
+                  }
+                };
+                
+                updatedOverviews.unshift(newChat);
+                set({ 
+                  overviews: { 
+                    ...overviews, 
+                    [session]: updatedOverviews 
+                  } 
+                });
+              }
+            }
+            
+            // Mesajı store'a ekle
+            const chatMessages = messages[chatId] || [];
+            set({ 
+              messages: { 
+                ...messages, 
+                [chatId]: [...chatMessages, message] 
+              } 
+            });
+            
+            console.log('Message processed:', { session, chatId, message });
+            return;
+          }
+          
+          // Mesaj durumu güncellemeleri
+          if (data.event === 'message.status' && data.chatId && data.messageId && data.ack !== undefined) {
+            const { messages } = get();
+            const chatMessages = messages[data.chatId] || [];
+            const messageIndex = chatMessages.findIndex(m => m.id === data.messageId);
+            
+            if (messageIndex !== -1) {
+              const updatedMessages = [...chatMessages];
+              updatedMessages[messageIndex] = {
+                ...updatedMessages[messageIndex],
+                ack: data.ack
+              };
+              
+              set({ 
+                messages: { 
+                  ...messages, 
+                  [data.chatId]: updatedMessages 
+                } 
+              });
+            }
+            return;
+          }
+          
+        } catch (e) {
+          console.error('Chat Overview WebSocket parse error:', e);
+        }
+      };
+      
+      ws.onerror = (e) => {
+        set({ error: 'Chat Overview WebSocket bağlantı hatası' });
+      };
+      
+      ws.onclose = () => {
+        // İsteğe bağlı: Otomatik reconnect
+      };
+      
+      set({ chatWebsocket: ws });
+    },
+    updateOverview: (sessionId: string, chatOverview: APIChatOverview) => {
+      const { overviews } = get();
+      if (overviews[sessionId]) {
+        const updatedOverviews = overviews[sessionId].map(chat => 
+          chat.id === chatOverview.id ? chatOverview : chat
+        );
+        set({ 
+          overviews: { 
+            ...overviews, 
+            [sessionId]: updatedOverviews 
+          } 
+        });
+      }
+    },
+    addMessage: (chatId: string, message: APIMessage) => {
+      const { messages } = get();
+      const chatMessages = messages[chatId] || [];
+      
+      // Aynı ID'li mesaj var mı kontrol et
+      const existingIndex = chatMessages.findIndex(m => m.id === message.id);
+      
+      if (existingIndex !== -1) {
+        // Mevcut mesajı güncelle
+        const updatedMessages = [...chatMessages];
+        updatedMessages[existingIndex] = message;
+        set({ 
+          messages: { 
+            ...messages, 
+            [chatId]: updatedMessages 
+          } 
+        });
+      } else {
+        // Yeni mesaj ekle
+        set({ 
+          messages: { 
+            ...messages, 
+            [chatId]: [...chatMessages, message] 
+          } 
+        });
+      }
+    },
+    updateMessageStatus: (chatId: string, messageId: string, ack: number) => {
+      const { messages } = get();
+      const chatMessages = messages[chatId] || [];
+      const messageIndex = chatMessages.findIndex(m => m.id === messageId);
+      
+      if (messageIndex !== -1) {
+        const updatedMessages = [...chatMessages];
+        updatedMessages[messageIndex] = {
+          ...updatedMessages[messageIndex],
+          ack: ack
+        };
+        
+        set({ 
+          messages: { 
+            ...messages, 
+            [chatId]: updatedMessages 
+          } 
+        });
+      }
     },
   });
 }); 

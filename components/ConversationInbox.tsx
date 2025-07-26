@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import { authenticatedFetch } from '@/lib/auth';
-import { useSessionStore } from '@/hooks/useSessionStore';
+import { useSessionStore, APIMessage } from '@/hooks/useSessionStore';
 
 // API Response Interfaces
 interface APIChatOverview {
@@ -42,26 +42,6 @@ interface APIChatOverview {
     name: string;
     conversationTimestamp: number;
   };
-}
-
-interface APIMessage {
-  id: string;
-  timestamp: number;
-  from: string;
-  fromMe: boolean;
-  source: string;
-  to: string;
-  participant: string | null;
-  body: string;
-  hasMedia: boolean;
-  media: any;
-  ack: number;
-  ackName: string;
-  author: string;
-  location: any;
-  vCards: string[];
-  _data: any;
-  replyTo: any;
 }
 
 interface APISession {
@@ -126,9 +106,12 @@ export default function ConversationInbox() {
     error: sessionsError,
     fetchSessions,
     overviews,
+    messages: storeMessages,
     fetchOverview,
     prefetchAllOverviews,
+    addMessage,
   } = useSessionStore();
+  
   const [selectedContact, setSelectedContact] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'unread' | 'pinned' | 'archived'>('all');
@@ -158,6 +141,14 @@ export default function ConversationInbox() {
     }
   }, [sessions, selectedSession]);
 
+  // Websocket başlatma - SessionManager'da zaten başlatılıyor
+  // useEffect(() => {
+  //   if (sessions.length > 0 && !websocketStarted) {
+  //     subscribeToChatOverview();
+  //     setWebsocketStarted(true);
+  //   }
+  // }, [sessions, websocketStarted, subscribeToChatOverview]);
+
   // selectedSession değiştiğinde overview cache'de yoksa fetch et, ilk fetch'te prefetch başlat
   useEffect(() => {
     if (selectedSession) {
@@ -177,6 +168,52 @@ export default function ConversationInbox() {
       }
     }
   }, [selectedSession, overviews, fetchOverview, prefetchAllOverviews]);
+
+  // Overviews değiştiğinde contacts'i güncelle
+  useEffect(() => {
+    if (selectedSession && overviews[selectedSession]) {
+      setContacts(formatContacts(overviews[selectedSession], selectedSession));
+    }
+  }, [overviews, selectedSession]);
+
+  // Store'daki messages değiştiğinde UI messages'i güncelle
+  useEffect(() => {
+    if (selectedContact) {
+      const contact = contacts.find(c => c.id === selectedContact);
+      if (contact && storeMessages[contact.rawChatId]) {
+        const apiMessages = storeMessages[contact.rawChatId];
+        const formattedMessages: Message[] = apiMessages.map((msg: APIMessage) => {
+          const messageTime = new Date(msg.timestamp * 1000);
+          const timeString = messageTime.toLocaleTimeString('tr-TR', { 
+            hour: '2-digit', 
+            minute: '2-digit' 
+          });
+          
+          let status: 'sent' | 'delivered' | 'read' = 'sent';
+          if (msg.ack === 2) status = 'delivered';
+          if (msg.ack === 3) status = 'read';
+          
+          let messageType: 'text' | 'image' | 'document' = 'text';
+          if (msg.hasMedia) {
+            messageType = 'image';
+          }
+          
+          return {
+            id: msg.id,
+            contactId: selectedContact,
+            content: msg.body,
+            timestamp: timeString,
+            isOutgoing: msg.fromMe,
+            status: status,
+            type: messageType,
+            rawId: msg.id
+          };
+        }).reverse();
+        
+        setMessages(formattedMessages);
+      }
+    }
+  }, [storeMessages, selectedContact, contacts]);
 
   // Helper to format contacts from overview
   function formatContacts(apiChats: any[], sessionId: string): Contact[] {
@@ -217,35 +254,11 @@ export default function ConversationInbox() {
       
       const apiMessages: APIMessage[] = await response.json();
       
-      const formattedMessages: Message[] = apiMessages.map((msg) => {
-        const messageTime = new Date(msg.timestamp * 1000);
-        const timeString = messageTime.toLocaleTimeString('tr-TR', { 
-          hour: '2-digit', 
-          minute: '2-digit' 
-        });
-        
-        let status: 'sent' | 'delivered' | 'read' = 'sent';
-        if (msg.ack === 2) status = 'delivered';
-        if (msg.ack === 3) status = 'read';
-        
-        let messageType: 'text' | 'image' | 'document' = 'text';
-        if (msg.hasMedia) {
-          messageType = 'image'; // Basit olarak tüm media'yı image olarak kabul ediyoruz
-        }
-        
-        return {
-          id: msg.id,
-          contactId: contactId,
-          content: msg.body,
-          timestamp: timeString,
-          isOutgoing: msg.fromMe,
-          status: status,
-          type: messageType,
-          rawId: msg.id
-        };
-      }).reverse(); // API'den son mesajlar ilk geliyor, tersine çeviriyoruz
+      // Store'a mesajları ekle
+      apiMessages.forEach(msg => {
+        addMessage(chatId, msg);
+      });
       
-      setMessages(formattedMessages);
     } catch (err) {
       console.error('Error fetching messages:', err);
     } finally {
@@ -273,13 +286,29 @@ export default function ConversationInbox() {
       
       const result = await response.json();
       
-      // Başarılı gönderimden sonra mesajları yenile
-      if (selectedContact) {
-        const contact = contacts.find(c => c.id === selectedContact);
-        if (contact) {
-          await fetchMessages(contact.sessionId, contact.rawChatId, contact.id);
-        }
-      }
+      // Gönderilen mesajı store'a ekle (websocket'ten gelene kadar geçici olarak)
+      // Eğer websocket'ten aynı mesaj gelirse, bu geçici mesaj otomatik olarak güncellenecek
+      const tempMessage: APIMessage = {
+        id: result.id || `temp_${Date.now()}`,
+        timestamp: Math.floor(Date.now() / 1000),
+        from: sessions.find(s => s.name === sessionId)?.me?.id || '',
+        fromMe: true,
+        source: sessionId,
+        to: chatId,
+        participant: null,
+        body: text,
+        hasMedia: false,
+        media: null,
+        ack: 1, // sent
+        ackName: 'sent',
+        author: sessions.find(s => s.name === sessionId)?.me?.id || '',
+        location: null,
+        vCards: [],
+        _data: result,
+        replyTo: null
+      };
+      
+      addMessage(chatId, tempMessage);
       
       return result;
     } catch (err) {
@@ -326,6 +355,7 @@ export default function ConversationInbox() {
     if (selectedContact) {
       const contact = contacts.find(c => c.id === selectedContact);
       if (contact) {
+        // Mesajları fetch et
         fetchMessages(contact.sessionId, contact.rawChatId, contact.id);
       }
     }
@@ -727,7 +757,7 @@ export default function ConversationInbox() {
                     size="sm"
                     onClick={() => {
                       if (selectedContactData) {
-                        // fetchMessages(selectedContactData.sessionId, selectedContactData.rawChatId, selectedContactData.id); // This function is removed, use overview cache
+                        fetchMessages(selectedContactData.sessionId, selectedContactData.rawChatId, selectedContactData.id);
                       }
                     }}
                     disabled={messagesLoading}

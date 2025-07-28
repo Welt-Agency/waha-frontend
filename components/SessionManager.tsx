@@ -119,7 +119,13 @@ export default function SessionManager() {
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             Yenile
           </Button>
-          <Button className="bg-[#075E54] hover:bg-[#064e44] text-white">
+          <Button 
+            onClick={() => {
+              setSelectedSessionId(undefined);
+              setShowQRModal(true);
+            }}
+            className="bg-[#075E54] hover:bg-[#064e44] text-white"
+          >
             <Plus className="h-5 w-5 mr-2" />Yeni WhatsApp Numarası Ekle
           </Button>
         </div>

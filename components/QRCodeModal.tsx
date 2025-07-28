@@ -215,7 +215,7 @@ export default function QRCodeModal({ open, onOpenChange, onSessionAdded, existi
       } catch (err) {
         console.error('Error checking session status:', err);
       }
-    }, 3000); // Check every 3 seconds
+    }, 10000); // Check every 10 seconds
   };
 
   // Countdown timer for QR expiry

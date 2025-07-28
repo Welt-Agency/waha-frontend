@@ -111,6 +111,19 @@ export default function ConversationInbox() {
     prefetchAllOverviews,
     addMessage,
   } = useSessionStore();
+
+  // Cache'i bypass eden overview fetch fonksiyonu
+  const fetchOverviewForce = async (sessionId: string) => {
+    try {
+      const res = await authenticatedFetch(`/chats/${sessionId}/overview`);
+      if (!res.ok) throw new Error('Overview alınamadı');
+      const data = await res.json();
+      return data;
+    } catch (e) {
+      console.error(`Error fetching overview for session ${sessionId}:`, e);
+      return undefined;
+    }
+  };
   
   const [selectedContact, setSelectedContact] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -157,16 +170,17 @@ export default function ConversationInbox() {
       if (selectedSession === 'ALL') {
         // Tüm session'ların overview'larını birleştir
         const allContacts: Contact[] = [];
+        
+        // Tüm session'lar için force fetch yap
         const sessionPromises = sessions.map(async (session) => {
-          if (overviews[session.name]) {
-            const sessionContacts = formatContacts(overviews[session.name], session.name);
-            allContacts.push(...sessionContacts);
-          } else {
-            const data = await fetchOverview(session.name);
+          try {
+            const data = await fetchOverviewForce(session.name);
             if (data) {
               const sessionContacts = formatContacts(data, session.name);
               allContacts.push(...sessionContacts);
             }
+          } catch (error) {
+            console.error(`Error fetching overview for session ${session.name}:`, error);
           }
         });
         

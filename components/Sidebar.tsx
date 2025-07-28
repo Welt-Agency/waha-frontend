@@ -13,27 +13,37 @@ import {
   UserCog
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { LoginResponse } from '@/lib/auth';
+import { LoginResponse, clearAuth } from '@/lib/auth';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 interface SidebarProps {
-  activeTab: string;
-  setActiveTab: (tab: string) => void;
   closeSidebar: () => void;
-  user?: LoginResponse | null;
+  user?: any;
   onLogout?: () => void;
 }
 
 const menuItems = [
   { id: 'sessions', label: 'Numara Yönetimi', icon: Smartphone },
   { id: 'conversations', label: 'Mesajlar', icon: MessageSquare },
-  { id: 'bulk-message', label: 'Toplu Mesaj', icon: Send },
+  { id: 'bulk_message', label: 'Toplu Mesaj', icon: Send },
   { id: 'contacts', label: 'Kişiler', icon: Users },
   { id: 'employees', label: 'Çalışanlar', icon: UserCog, adminOnly: true },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
-export default function Sidebar({ activeTab, setActiveTab, closeSidebar, user, onLogout }: SidebarProps) {
+export default function Sidebar({ closeSidebar, user, onLogout }: SidebarProps) {
   const isAdmin = user?.user_type === 'admin';
+  const router = useRouter();
+
+  const handleLogout = () => {
+    if (onLogout) {
+      onLogout();
+    } else {
+      clearAuth();
+      router.replace('/login');
+    }
+  };
 
   return (
     <div className="flex flex-col h-full bg-[#075E54] text-white">
@@ -68,29 +78,26 @@ export default function Sidebar({ activeTab, setActiveTab, closeSidebar, user, o
 
           const Icon = item.icon;
           return (
-            <button
+            <Link
               key={item.id}
-              onClick={() => {
-                setActiveTab(item.id);
-                closeSidebar();
-              }}
+              href={`/dashboard/${item.id}`}
+              onClick={closeSidebar}
               className={cn(
                 "w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-left transition-all duration-200",
-                activeTab === item.id
-                  ? "bg-[#064e44] text-white shadow-lg"
-                  : "text-green-100 hover:bg-[#064e44] hover:text-white"
+                // Aktif route kontrolü burada yapılabilir (isteğe bağlı)
+                "text-green-100 hover:bg-[#064e44] hover:text-white"
               )}
             >
               <Icon className="h-5 w-5" />
               <span className="font-medium">{item.label}</span>
-            </button>
+            </Link>
           );
         })}
       </nav>
 
       {/* Footer */}
       <div className="p-4 border-t border-[#064e44] space-y-3">
-        {/* User Info */}
+        {/* User Info with Logout Icon */}
         {user && (
           <div className="flex items-center space-x-3 px-4 py-3 bg-[#064e44] rounded-lg">
             <div className="bg-white p-2 rounded-full">
@@ -100,16 +107,12 @@ export default function Sidebar({ activeTab, setActiveTab, closeSidebar, user, o
               <p className="text-sm font-medium">{user.email}</p>
               <p className="text-xs text-green-100">{user.user_type} - Aktif Oturum</p>
             </div>
-            {onLogout && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={onLogout}
-                className="text-red-200 hover:text-red-100 hover:bg-red-500/20 p-2"
-              >
-                <LogOut className="h-4 w-4" />
-              </Button>
-            )}
+            <button
+              onClick={handleLogout}
+              className="p-2 rounded-md hover:bg-red-500/20 text-red-200 hover:text-red-100 transition-colors"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
           </div>
         )}
         

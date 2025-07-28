@@ -12,32 +12,14 @@ import { cn } from '@/lib/utils';
 import { LoginResponse } from '@/lib/auth';
 
 interface DashboardProps {
-  user: LoginResponse | null;
-  onLogout: () => void;
+  user?: any;
+  onLogout?: () => void;
+  children?: React.ReactNode;
 }
 
-export default function Dashboard({ user, onLogout }: DashboardProps) {
-  const [activeTab, setActiveTab] = useState('sessions');
+export default function Dashboard({ user, onLogout, children }: DashboardProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  const renderContent = () => {
-    switch (activeTab) {
-      case 'sessions':
-        return <SessionManager user={user} />;
-      case 'conversations':
-        return <ConversationInbox />;
-      case 'bulk-message':
-        return <BulkMessage />;
-      case 'contacts':
-        return <Contacts />;
-      case 'employees':
-        return <Employees />;
-      case 'settings':
-        return <Settings user={user} onLogout={onLogout} />;
-      default:
-        return <SessionManager user={user} />;
-    }
-  };
+  const isAdmin = user?.user_type === 'admin';
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
@@ -48,34 +30,27 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
           onClick={() => setSidebarOpen(false)}
         />
       )}
-      
       {/* Sidebar - Fixed */}
       <div className="hidden lg:flex lg:flex-shrink-0">
         <div className="flex flex-col w-80">
           <Sidebar 
-            activeTab={activeTab} 
-            setActiveTab={setActiveTab}
             closeSidebar={() => setSidebarOpen(false)}
             user={user}
             onLogout={onLogout}
           />
         </div>
       </div>
-
       {/* Mobile Sidebar */}
       <div className={cn(
         "fixed inset-y-0 left-0 z-50 w-80 transform transition-transform duration-300 ease-in-out lg:hidden",
         sidebarOpen ? "translate-x-0" : "-translate-x-full"
       )}>
         <Sidebar 
-          activeTab={activeTab} 
-          setActiveTab={setActiveTab}
           closeSidebar={() => setSidebarOpen(false)}
           user={user}
           onLogout={onLogout}
         />
       </div>
-
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 bg-gray-50">
         {/* Mobile header */}
@@ -91,11 +66,10 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
           <h1 className="text-lg font-semibold text-gray-900">WhatsApp Manager</h1>
           <div className="w-10" /> {/* Spacer for centering */}
         </div>
-
         {/* Page content */}
         <main className="flex-1 overflow-hidden">
           <div className="h-full overflow-y-auto">
-            {renderContent()}
+            {children}
           </div>
         </main>
       </div>

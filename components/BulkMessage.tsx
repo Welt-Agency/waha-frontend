@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Send, MessageSquare, Users, RefreshCw, AlertCircle, CheckCircle, Zap, RotateCcw, Clock, Info, Play, Pause, X } from 'lucide-react';
+import { Send, MessageSquare, Users, RefreshCw, AlertCircle, CheckCircle, Zap, RotateCcw, Clock, Info, Play, Pause, X, History, Eye } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
@@ -13,7 +13,9 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { authenticatedFetch } from '@/lib/auth';
+import { useSessionStore } from '@/hooks/useSessionStore';
 
 interface Session {
   id: string;
@@ -38,6 +40,61 @@ interface APISession {
   assignedWorker: string;
 }
 
+interface JobResult {
+  _data: {
+    id: {
+      fromMe: boolean;
+      remote: string;
+      id: string;
+      self: string;
+      _serialized: string;
+    };
+    body: string;
+    t: number;
+    from: {
+      server: string;
+      user: string;
+      _serialized: string;
+    };
+    to: {
+      server: string;
+      user: string;
+      _serialized: string;
+    };
+    Info?: {
+      IsFromMe?: boolean;
+      Chat?: string;
+      Sender?: string;
+      Timestamp?: number;
+    };
+  };
+  id: {
+    fromMe: boolean;
+    remote: string;
+    id: string;
+    _serialized: string;
+  };
+  body: string;
+  timestamp: number;
+  from: string;
+  to: string;
+  fromMe: boolean;
+  error?: string;
+}
+
+interface Job {
+  id: string;
+  status: 'pending' | 'completed' | 'failed' | 'cancelled';
+  result: JobResult[];
+  total_count: number;
+  current_count: number;
+  cancelled: boolean;
+  finished: boolean;
+  message_delay_seconds: number;
+  created_at: string;
+  updated_at: string;
+}
+
 interface BulkMessageResult {
   phoneNumber: string;
   status: 'success' | 'error' | 'pending';
@@ -49,56 +106,70 @@ interface BulkMessageResult {
 export default function BulkMessage() {
   const [phoneListText, setPhoneListText] = useState('');
   const [messageContent, setMessageContent] = useState('');
-  const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSession, setSelectedSession] = useState<string[]>([]);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [results, setResults] = useState<any>(null);
   const [useRotation, setUseRotation] = useState(false);
   const [useAI, setUseAI] = useState(false);
   const [messageDelaySeconds, setMessageDelaySeconds] = useState(1);
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [polling, setPolling] = useState(false);
-  const pollingInterval = useRef<NodeJS.Timeout | null>(null);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobsLoading, setJobsLoading] = useState(false);
+  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [showJobDetails, setShowJobDetails] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-  const [cancelled, setCancelled] = useState(false);
-  const [jobFinished, setJobFinished] = useState(false);
-  let lastResultLength = useRef<number>(0);
+
+  // useSessionStore'dan session'ları al
+  const { sessions: apiSessions, loading: sessionsLoading, fetchSessions } = useSessionStore();
+  
+  // API session'larını formatla
+  const sessions: Session[] = apiSessions
+    .filter(session => session.me && session.me.id && session.status === 'WORKING')
+    .map((session, index) => ({
+      id: session.name,
+      name: session.name,
+      label: session.me!.pushName || `Session ${index + 1}`,
+      phone: session.me!.id.replace('@c.us', ''),
+      status: session.status
+    }));
 
   // Kullanıcı sayısını hesapla (her satır bir kişi)
   const getUserCount = () => {
     return phoneListText.split('\n').filter(line => line.trim().length > 0).length;
   };
 
-  // API'den session'ları çek
-  const fetchSessions = async () => {
+
+
+  // API'den jobs'ları çek
+  const fetchJobs = async (showLoading = true) => {
     try {
-      setSessionsLoading(true);
-      const response = await authenticatedFetch('/sessions');
-      if (!response.ok) throw new Error('Session verileri alınamadı');
+      if (showLoading) setJobsLoading(true);
+      const response = await authenticatedFetch('/jobs/');
+      if (!response.ok) throw new Error('Jobs verileri alınamadı');
       
-      const apiSessions: APISession[] = await response.json();
-      const formattedSessions: Session[] = apiSessions
-        .filter(session => session.me && session.me.id && session.status === 'WORKING')
-        .map((session, index) => ({
-          id: session.name,
-          name: session.name,
-          label: session.me!.pushName || `Session ${index + 1}`,
-          phone: session.me!.id.replace('@c.us', ''),
-          status: session.status
-        }));
+      const jobsData: Job[] = await response.json();
       
-      setSessions(formattedSessions);
+      // Yeni job'ları en tepeye ekle (en yeni job'lar önce)
+      setJobs(jobsData.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()));
     } catch (err) {
-      console.error('Error fetching sessions:', err);
+      console.error('Error fetching jobs:', err);
     } finally {
-      setSessionsLoading(false);
+      if (showLoading) setJobsLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchSessions();
+    fetchJobs(true);
   }, []);
+
+  // Jobs'ları periyodik olarak güncelle (pending job'lar için)
+  useEffect(() => {
+    const jobsInterval = setInterval(() => {
+      if (jobs.some(job => job.status === 'pending' && !job.finished)) {
+        fetchJobs(false); // Arka planda fetch et, loading gösterme
+      }
+    }, 10000); // 10 saniyede bir kontrol et
+
+    return () => clearInterval(jobsInterval);
+  }, [jobs]);
 
 
   // Session seçimi handle et
@@ -135,9 +206,6 @@ export default function BulkMessage() {
       return;
     }
     setLoading(true);
-    setResults(null);
-    setJobId(null);
-    setPolling(false);
     try {
       let payload: any = {
         phone_list_text: phoneListText,
@@ -157,107 +225,108 @@ export default function BulkMessage() {
       });
       const data = await response.json().catch(() => ({}));
       if (response.ok && data.job_id) {
-        setJobId(data.job_id);
-        setPolling(true);
-        // setLoading(true); // loading zaten true
-      } else {
-        setResults({ ok: false, data: { message: data.message || 'Job başlatılamadı' } });
+        // Jobs listesini güncelle
+        setTimeout(() => fetchJobs(false), 1000);
         setLoading(false);
+      } else {
+        setLoading(false);
+        alert(data.message || 'Job başlatılamadı');
       }
     } catch (error) {
-      setResults({ ok: false, data: { message: 'Bağlantı hatası' } });
       setLoading(false);
+      alert('Bağlantı hatası');
     }
   };
 
-  // Polling logic for job status
-  useEffect(() => {
-    if (jobId && polling) {
-      const fetchJobStatus = async () => {
-        try {
-          const res = await authenticatedFetch(`/job-status/${jobId}`);
-          const data = await res.json().catch(() => ({}));
-          setResults({
-            ok: data.status === 'completed',
-            data: data.result || [],
-            status: data.status,
-            current_count: data.current_count,
-            total_count: data.total_count,
-            finished: data.finished,
-          });
-          if (data.finished) {
-            setJobFinished(true);
-            setPolling(false);
-            setLoading(false);
-            setJobId(null);
-            if (pollingInterval.current) {
-              clearInterval(pollingInterval.current);
-              pollingInterval.current = null;
-            }
-          }
-        } catch (err) {
-          setResults({ ok: false, data: { message: 'Job durumu alınamadı' } });
-          setPolling(false);
-          setLoading(false);
-          setJobId(null);
-          if (pollingInterval.current) {
-            clearInterval(pollingInterval.current);
-            pollingInterval.current = null;
-          }
-        }
-      };
-      fetchJobStatus();
-      const intervalMs = Math.max(2000, Math.min(10000, messageDelaySeconds * 1000));
-      pollingInterval.current = setInterval(fetchJobStatus, intervalMs);
-      return () => {
-        if (pollingInterval.current) {
-          clearInterval(pollingInterval.current);
-          pollingInterval.current = null;
-        }
-      };
-    }
-    return () => {
-      if (pollingInterval.current) {
-        clearInterval(pollingInterval.current);
-        pollingInterval.current = null;
-      }
-    };
-  }, [jobId, polling, messageDelaySeconds]);
+
 
   // Cancel job fonksiyonu
-  const handleCancelJob = async () => {
-    if (!jobId) return;
+  const handleCancelJob = async (jobId: string) => {
     setCancelling(true);
     try {
       await authenticatedFetch(`/job-cancel/${jobId}`, { method: 'POST' });
-      setCancelled(true);
       setCancelling(false);
-      // Polling devam edecek, sadece cancelled state güncellendi
+      // Jobs listesini güncelle
+      setTimeout(() => fetchJobs(false), 1000);
     } catch (err) {
       setCancelling(false);
-      // Hata mesajı gösterilebilir
+      alert('Job iptal edilemedi');
     }
   };
 
-  // Komponent unmount olursa polling'i temizle
-  useEffect(() => {
-    return () => {
-      if (pollingInterval.current) {
-        clearInterval(pollingInterval.current);
-        pollingInterval.current = null;
+  // Job detaylarını göster
+  const showJobDetailsModal = (job: Job) => {
+    setSelectedJob(job);
+    setShowJobDetails(true);
+  };
+
+  // Job durumuna göre badge rengi
+  const getJobStatusBadge = (status: string) => {
+    switch (status) {
+      case 'completed':
+        return <Badge className="bg-green-100 text-green-800">Tamamlandı</Badge>;
+      case 'pending':
+        return <Badge className="bg-yellow-100 text-yellow-800">Devam Ediyor</Badge>;
+      case 'failed':
+        return <Badge className="bg-red-100 text-red-800">Başarısız</Badge>;
+      case 'cancelled':
+        return <Badge className="bg-gray-100 text-gray-800">İptal Edildi</Badge>;
+      default:
+        return <Badge variant="outline">{status}</Badge>;
+    }
+  };
+
+  // Job sonuçlarını formatla
+  const formatJobResults = (job: Job) => {
+    if (!job.result || !Array.isArray(job.result)) return [];
+    
+    return job.result.map((result, index) => {
+      // Telefon numarası
+      let phone = '';
+      if (result._data?.Info?.Chat) {
+        phone = result._data.Info.Chat.replace(/@.*/, '');
+      } else if (result.to) {
+        phone = result.to.replace(/@.*/, '');
       }
-    };
-  }, []);
-
-  // Gönderimi duraklat/devam ettir
-  const togglePause = () => {
-    // This function is no longer needed as rotation is removed
+      
+      // Başarı durumu
+      let status: 'success' | 'pending' | 'error' = 'pending';
+      if (result.error) status = 'error';
+      else if (job.status === 'completed') status = 'success';
+      
+      // Mesaj içeriği
+      let text = result._data?.body || result.body || '';
+      
+      // Zaman
+      let timestamp = '';
+      if (result._data?.t) {
+        try {
+          const d = new Date(result._data.t * 1000);
+          timestamp = d.toLocaleString('tr-TR');
+        } catch {}
+      }
+      
+      // Sender (gönderici) numarası
+      let sender = '';
+      if (result._data?.Info?.Sender) {
+        const match = result._data.Info.Sender.match(/^(\d+)/);
+        sender = match ? match[1] : '';
+      } else if (result.from) {
+        sender = result.from.replace(/@.*/, '');
+      }
+      
+      return {
+        phone,
+        status,
+        text,
+        timestamp,
+        sender,
+        error: result.error
+      };
+    });
   };
 
-  // Gönderimi durdur
-  const stopSending = () => {
-    // This function is no longer needed as rotation is removed
-  };
+
   return (
     <div className="p-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -267,46 +336,8 @@ export default function BulkMessage() {
             <h1 className="text-3xl font-bold text-gray-900 mb-2">Toplu Mesaj Gönderimi</h1>
             <p className="text-gray-600">Birden fazla kişiye aynı anda mesaj gönderin</p>
           </div>
-          <div className="flex items-center space-x-3">
-            <Button 
-              onClick={fetchSessions}
-              variant="outline"
-              size="sm"
-              disabled={sessionsLoading}
-            >
-              {sessionsLoading ? (
-                <RefreshCw className="h-4 w-4 animate-spin mr-2" />
-              ) : (
-                <RefreshCw className="h-4 w-4 mr-2" />
-              )}
-              Yenile
-            </Button>
-            
-            {/* Gönderim Kontrolleri */}
-            {loading && (
-              <div className="flex items-center space-x-2">
-                <Button
-                  onClick={togglePause}
-                  variant="outline"
-                  size="sm"
-                  className="text-yellow-600 hover:text-yellow-700"
-                >
-                  {/* This button is no longer needed as rotation is removed */}
-                  <Play className="h-4 w-4 mr-2" />
-                  Devam Et
-                </Button>
-                <Button
-                  onClick={stopSending}
-                  variant="outline"
-                  size="sm"
-                  className="text-red-600 hover:text-red-700"
-                >
-                  <X className="h-4 w-4 mr-2" />
-                  Durdur
-                </Button>
-              </div>
-            )}
-          </div>
+          
+
         </div>
       </div>
 
@@ -565,197 +596,109 @@ export default function BulkMessage() {
 
         {/* Sağ Panel - Sonuçlar ve İstatistikler */}
         <div className="space-y-6">
-          {/* Progress Bar */}
-          {(loading || (results && typeof results.current_count === 'number' && typeof results.total_count === 'number')) && (
-            <Card>
-              <CardContent className="pt-6">
-                <div className="space-y-3">
-                  <div className="flex justify-between text-sm items-center">
-                    <span>İlerleme</span>
-                    <span>
-                      {typeof results?.current_count === 'number' && typeof results?.total_count === 'number'
-                        ? `${Math.round((results.current_count / results.total_count) * 100)}%`
-                        : '0%'}
-                    </span>
-                    {/* Cancel butonu */}
-                    {jobId && !cancelled && !cancelling && !jobFinished && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="ml-4 text-red-600 border-red-200"
-                        onClick={handleCancelJob}
-                        disabled={cancelling}
-                      >
-                        İptal Et
-                      </Button>
-                    )}
-                    {cancelling && (
-                      <span className="ml-4 text-yellow-600 flex items-center"><RefreshCw className="h-4 w-4 animate-spin mr-1" /> İptal ediliyor...</span>
-                    )}
-                    {cancelled && !jobFinished && (
-                      <span className="ml-4 text-gray-600">İşlem iptal edildi. Son gönderilen mesajlar birkaç saniye içinde görünebilir.</span>
-                    )}
-                    {jobFinished && (
-                      <span className="ml-4 text-green-600">İşlem tamamen sonlandı.</span>
-                    )}
-                  </div>
-                  <Progress value={
-                    typeof results?.current_count === 'number' && typeof results?.total_count === 'number'
-                      ? (results.current_count / results.total_count) * 100
-                      : 0
-                  } className="h-3" />
-                  <div className="flex justify-between text-xs text-gray-600">
-                    {typeof results?.current_count === 'number' && typeof results?.total_count === 'number' && (
-                      <span>{results.current_count} / {results.total_count} tamamlandı</span>
-                    )}
-                  </div>
+          {/* Geçmiş Job'lar */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <History className="h-5 w-5 text-[#075E54]" />
+                  <CardTitle>Geçmiş Job'lar</CardTitle>
                 </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Sonuçlar Listesi */}
-          {results && (
-            <>
-              {/* Başarılı ve hatalı sayısı */}
-              <div className="grid grid-cols-2 gap-4 mb-4">
-                <Card>
-                  <CardContent className="pt-6">
-                    <div className="text-2xl font-bold text-green-600">
-                      {Array.isArray(results.data) ? results.data.filter((result: any) => {
-                        // Başarı kontrolü
-                        if (result.error) return false;
-                        if (results.ok) return true;
-                        if (result._data?.Info?.IsFromMe === true) return true;
-                        return false;
-                      }).length : 0}
-                    </div>
-                    <p className="text-sm text-gray-600">Başarılı</p>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardContent className="pt-6">
-                    <div className="text-2xl font-bold text-red-600">
-                      {Array.isArray(results.data) ? results.data.filter((result: any) => {
-                        // Hata kontrolü
-                        if (result.error) return true;
-                        if (results.ok) return false;
-                        if (result._data?.Info?.IsFromMe === false) return true;
-                        return false;
-                      }).length : 0}
-                    </div>
-                    <p className="text-sm text-gray-600">Hatalı</p>
-                  </CardContent>
-                </Card>
+                <Button
+                  onClick={() => fetchJobs(true)}
+                  variant="outline"
+                  size="sm"
+                  disabled={jobsLoading}
+                >
+                  {jobsLoading ? (
+                    <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                  )}
+                  Yenile
+                </Button>
               </div>
-              <Card>
-                <CardHeader>
-                  <CardTitle>Gönderim Sonuçları</CardTitle>
-                  <CardDescription>
-                    Son gönderim işleminin detayları
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3 max-h-[500px] overflow-y-auto">
-                    {Array.isArray(results.data) && results.data.length > 0 ? (
-                      results.data.map((result: any, index: number) => {
-                        // Telefon numarası
-                        console.log(result);
-                        let phone = '';
-                        if (result._data?.Info?.Chat) {
-                          phone = result._data.Info?.Chat.replace(/@.*/, '');
-                        } else if (result.chatId) {
-                          phone = typeof result.chatId === 'string' ? result.chatId.replace(/@.*/, '') : '';
-                        } else if (result.id && typeof result.id === 'string') {
-                          const match = result.id.match(/_(\d+)@/);
-                          phone = match ? match[1] : '';
-                        } else if (result.from && typeof result.from === 'string') {
-                          phone = result.to.replace(/@.*/, '');
-                        }
-                        // Başarı durumu ve kart rengi
-                        let status: 'success' | 'pending' | 'error' = 'pending';
-                        if (result.error) status = 'error';
-                        else if (results.job_status === 'completed') status = 'success';
-                        else status = 'pending';
-                        // Mesaj içeriği
-                        let text = result._data?.body|| '';
-                        if (status === 'error' && result.error) {
-                          try {
-                            const jsonStart = result.error.indexOf('{');
-                            if (jsonStart !== -1) {
-                              const jsonStr = result.error.slice(jsonStart);
-                              const parsed = JSON.parse(jsonStr);
-                              if (parsed?.request?.body?.text) {
-                                text = parsed.request.body.text;
-                              }
-                            }
-                          } catch (e) {}
-                        }
-                        // Zaman
-                        let timestamp = '';
-                        if (result._data?.t) {
-                          try {
-                            const d = new Date(result._data.t * 1000);
-                            timestamp = d.toLocaleString('tr-TR');
-                          } catch {}
-                        } else if (result._data?.Info?.Timestamp) {
-                          try {
-                            const d = new Date(result._data.Info.Timestamp);
-                            timestamp = d.toLocaleString('tr-TR');
-                          } catch {}
-                        }
-                        // Sender (gönderici) numarası
-                        let sender = '';
-                        if (result._data?.Info?.Sender) {
-                          const match = result._data.Info.Sender.match(/^(\d+)/);
-                          sender = match ? match[1] : '';
-                        } else if (result.request?.body?.session) {
-                          sender = result.request.body.session;
-                        } else if (result.from && typeof result.from === 'string') {
-                          sender = result.from.replace(/@.*/, '');
-                        }
-                        // Kart durumu ve ikonunu result.status'a göre belirle
-                        let cardClass = '';
-                        let icon = null;
-                        if (result.job_status === 'completed') {
-                          cardClass = 'bg-green-50 border-green-200';
-                          icon = <CheckCircle className="h-5 w-5 text-green-600" />;
-                        } else if (result.job_status === 'pending') {
-                          cardClass = 'bg-yellow-50 border-yellow-200';
-                          icon = <RefreshCw className="h-5 w-5 text-yellow-600 animate-spin" />;
-                        } else if (result.job_status === 'error') {
-                          cardClass = 'bg-red-50 border-red-200';
-                          icon = <AlertCircle className="h-5 w-5 text-red-600" />;
-                        } else {
-                          cardClass = 'bg-gray-50 border-gray-200';
-                          icon = <Info className="h-5 w-5 text-gray-400" />;
-                        }
-                        return (
-                          <div key={index} className={`flex items-center space-x-3 p-3 border rounded-lg ${cardClass}`}>
-                            <div className="flex-shrink-0">
-                              {icon}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center space-x-2">
-                                <p className="font-medium text-sm">{phone ? `+${phone}` : '-'}</p>
-                                {sender && (
-                                  <Badge variant="outline" className="text-xs ml-2">{sender}</Badge>
-                                )}
-                              </div>
-                              <p className="text-xs text-gray-600">{text}</p>
-                              <p className="text-xs text-gray-500">{timestamp}</p>
-                            </div>
+              <CardDescription>
+                Önceki toplu mesaj gönderim işlemleri
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {jobsLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <RefreshCw className="h-6 w-6 animate-spin text-gray-400" />
+                  <span className="ml-2 text-gray-600">Job'lar yükleniyor...</span>
+                </div>
+              ) : jobs.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  <History className="h-8 w-8 mx-auto mb-2" />
+                  <p>Henüz job bulunamadı</p>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-[400px] overflow-y-auto">
+                  {jobs.map((job) => (
+                    <div key={job.id} className="border rounded-lg p-3 hover:bg-gray-50 transition-colors">
+                      <div className="flex items-start justify-between mb-3 gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center space-x-2 mb-1">
+                            {getJobStatusBadge(job.status)}
+                            <span className="text-xs text-gray-600 truncate">
+                              {new Date(job.created_at).toLocaleString('tr-TR')}
+                            </span>
                           </div>
-                        );
-                      })
-                    ) : (
-                      <div className="text-gray-500 text-sm">Gönderim sonucu bulunamadı.</div>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            </>
-          )}
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => showJobDetailsModal(job)}
+                          className="px-2 py-1 text-xs h-auto min-w-0 flex-shrink-0"
+                        >
+                          <Eye className="h-3 w-3 mr-1" />
+                          <span className="hidden sm:inline">Detaylar</span>
+                          <span className="sm:hidden">...</span>
+                        </Button>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-600">Toplam:</span>
+                          <span className="font-medium">{job.total_count}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-600">Tamamlanan:</span>
+                          <span className="font-medium">{job.current_count}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-600">Bekleme:</span>
+                          <span className="font-medium">{job.message_delay_seconds}s</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-600">Başarılı:</span>
+                          <span className="font-medium text-green-600">
+                            {formatJobResults(job).filter(r => r.status === 'success').length}
+                          </span>
+                        </div>
+                      </div>
+                      
+                      {job.status === 'pending' && !job.finished && (
+                        <div className="mt-3">
+                          <Progress 
+                            value={(job.current_count / job.total_count) * 100} 
+                            className="h-2" 
+                          />
+                          <div className="flex justify-between text-xs text-gray-600 mt-1">
+                            <span>{job.current_count} / {job.total_count}</span>
+                            <span>{Math.round((job.current_count / job.total_count) * 100)}%</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+
 
           {/* Yardım */}
           <Card>
@@ -780,6 +723,152 @@ export default function BulkMessage() {
           </Card>
         </div>
       </div>
+
+      {/* Job Detayları Modal */}
+      <Dialog open={showJobDetails} onOpenChange={setShowJobDetails}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <div className="flex items-center justify-between">
+              <DialogTitle>Job Detayları</DialogTitle>
+              {selectedJob && selectedJob.status === 'pending' && !selectedJob.finished && !selectedJob.cancelled && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleCancelJob(selectedJob.id)}
+                  disabled={cancelling}
+                  className="text-red-600 border-red-200 hover:bg-red-50"
+                >
+                  {cancelling ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+                      İptal Ediliyor...
+                    </>
+                  ) : (
+                    <>
+                      <X className="h-4 w-4 mr-2" />
+                      İptal Et
+                    </>
+                  )}
+                </Button>
+              )}
+            </div>
+            <DialogDescription>
+              {selectedJob ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span>Job ID: {selectedJob.id}</span>
+                    {getJobStatusBadge(selectedJob.status)}
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <span className="text-gray-600">Oluşturulma:</span>
+                      <span className="ml-2">{new Date(selectedJob.created_at).toLocaleString('tr-TR')}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Güncellenme:</span>
+                      <span className="ml-2">{new Date(selectedJob.updated_at).toLocaleString('tr-TR')}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Toplam:</span>
+                      <span className="ml-2">{selectedJob.total_count}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Tamamlanan:</span>
+                      <span className="ml-2">{selectedJob.current_count}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Bekleme Süresi:</span>
+                      <span className="ml-2">{selectedJob.message_delay_seconds}s</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">İptal Edildi:</span>
+                      <span className="ml-2">{selectedJob.cancelled ? 'Evet' : 'Hayır'}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+          
+          {selectedJob ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-3 gap-4 text-center">
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="text-2xl font-bold text-green-600">
+                      {formatJobResults(selectedJob).filter(r => r.status === 'success').length}
+                    </div>
+                    <p className="text-sm text-gray-600">Başarılı</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="text-2xl font-bold text-red-600">
+                      {formatJobResults(selectedJob).filter(r => r.status === 'error').length}
+                    </div>
+                    <p className="text-sm text-gray-600">Hatalı</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="text-2xl font-bold text-yellow-600">
+                      {formatJobResults(selectedJob).filter(r => r.status === 'pending').length}
+                    </div>
+                    <p className="text-sm text-gray-600">Bekliyor</p>
+                  </CardContent>
+                </Card>
+              </div>
+
+              <div className="space-y-3 max-h-[400px] overflow-y-auto">
+                <h4 className="font-medium">Gönderim Sonuçları</h4>
+                {formatJobResults(selectedJob).length > 0 ? (
+                  formatJobResults(selectedJob).map((result, index) => {
+                    let cardClass = '';
+                    let icon = null;
+                    
+                    if (result.status === 'success') {
+                      cardClass = 'bg-green-50 border-green-200';
+                      icon = <CheckCircle className="h-5 w-5 text-green-600" />;
+                    } else if (result.status === 'pending') {
+                      cardClass = 'bg-yellow-50 border-yellow-200';
+                      icon = <RefreshCw className="h-5 w-5 text-yellow-600 animate-spin" />;
+                    } else if (result.status === 'error') {
+                      cardClass = 'bg-red-50 border-red-200';
+                      icon = <AlertCircle className="h-5 w-5 text-red-600" />;
+                    } else {
+                      cardClass = 'bg-gray-50 border-gray-200';
+                      icon = <Info className="h-5 w-5 text-gray-400" />;
+                    }
+
+                    return (
+                      <div key={index} className={`flex items-center space-x-3 p-3 border rounded-lg ${cardClass}`}>
+                        <div className="flex-shrink-0">
+                          {icon}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center space-x-2">
+                            <p className="font-medium text-sm">{result.phone ? `+${result.phone}` : '-'}</p>
+                            {result.sender && (
+                              <Badge variant="outline" className="text-xs ml-2">{result.sender}</Badge>
+                            )}
+                          </div>
+                          <p className="text-xs text-gray-600">{result.text}</p>
+                          <p className="text-xs text-gray-500">{result.timestamp}</p>
+                          {result.error && (
+                            <p className="text-xs text-red-600 mt-1">{result.error}</p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="text-gray-500 text-sm">Gönderim sonucu bulunamadı.</div>
+                )}
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 } 

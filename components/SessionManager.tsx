@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useSessionStore } from '@/hooks/useSessionStore';
 import SessionCard from './SessionCard';
 import { Button } from '@/components/ui/button';
-import { Plus } from 'lucide-react';
+import { Plus, RefreshCw } from 'lucide-react';
 import { authenticatedFetch } from '@/lib/auth';
 import QRCodeModal from './QRCodeModal';
 
@@ -12,7 +12,12 @@ export default function SessionManager() {
   const sessions = useSessionStore(state => state.sessions);
   const loading = useSessionStore(state => state.loading);
   const error = useSessionStore(state => state.error);
+  const lastFetchTime = useSessionStore(state => state.lastFetchTime);
+  const initialized = useSessionStore(state => state.initialized);
+  const websocketConnected = useSessionStore(state => state.websocketConnected);
+  const chatWebsocketConnected = useSessionStore(state => state.chatWebsocketConnected);
   const fetchSessions = useSessionStore(state => state.fetchSessions);
+  const forceRefresh = useSessionStore(state => state.forceRefresh);
   const subscribeToSessionStatus = useSessionStore(state => state.subscribeToSessionStatus);
   const subscribeToChatOverview = useSessionStore(state => state.subscribeToChatOverview);
 
@@ -22,20 +27,46 @@ export default function SessionManager() {
   // WebSocket subscribe sadece bir kere çağrılsın
   const [websocketStarted, setWebsocketStarted] = useState(false);
 
+  // Manuel refresh fonksiyonu
+  const handleManualRefresh = () => {
+    forceRefresh();
+  };
+
+  // Cache durumu helper fonksiyonu
+  const getCacheStatus = () => {
+    if (!lastFetchTime) return null;
+    const now = Date.now();
+    const cacheDuration = 3600000; // 1 saat
+    const timeDiff = now - lastFetchTime;
+    const remainingMinutes = Math.floor((cacheDuration - timeDiff) / 60000);
+    const remainingSeconds = Math.ceil(((cacheDuration - timeDiff) % 60000) / 1000);
+    
+    if (timeDiff < cacheDuration) {
+      return `Cache aktif (${remainingMinutes}dk ${remainingSeconds}s kaldı)`;
+    }
+    return 'Cache süresi dolmuş';
+  };
+
   useEffect(() => {
-    if (sessions.length === 0) {
+    // Session'lar zaten yüklüyse fetch yapma
+    if (!initialized && sessions.length === 0 && !loading) {
       fetchSessions();
     }
-  }, [sessions.length, fetchSessions]);
+  }, [initialized, sessions.length, loading, fetchSessions]);
 
   useEffect(() => {
     if (!loading && sessions.length > 0 && !websocketStarted) {
       console.log('Starting websockets for sessions:', sessions.map(s => s.name));
-      subscribeToSessionStatus();
-      subscribeToChatOverview();
+      // WebSocket bağlantıları zaten açıksa tekrar açma
+      if (!websocketConnected) {
+        subscribeToSessionStatus();
+      }
+      if (!chatWebsocketConnected) {
+        subscribeToChatOverview();
+      }
       setWebsocketStarted(true);
     }
-  }, [loading, sessions, subscribeToSessionStatus, subscribeToChatOverview, websocketStarted]);
+  }, [loading, sessions, subscribeToSessionStatus, subscribeToChatOverview, websocketStarted, websocketConnected, chatWebsocketConnected]);
 
   // Handler fonksiyonları
   const handleRemove = async (sessionId: string) => {
@@ -59,7 +90,7 @@ export default function SessionManager() {
     // fetchSessions() kaldırıldı
   };
 
-  if (loading) {
+  if (loading && !initialized) {
     return <div className="h-full flex items-center justify-center">Yükleniyor...</div>;
   }
   if (error) {
@@ -69,10 +100,29 @@ export default function SessionManager() {
   return (
     <div className="h-full overflow-y-auto p-8">
       <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">Session Manager</h1>
-        <Button className="bg-[#075E54] hover:bg-[#064e44] text-white">
-          <Plus className="h-5 w-5 mr-2" />Yeni WhatsApp Numarası Ekle
-        </Button>
+        <div>
+          <h1 className="text-2xl font-bold">Session Manager</h1>
+          {lastFetchTime && (
+            <div className="text-sm text-gray-500 mt-1">
+              <p>Son güncelleme: {new Date(lastFetchTime).toLocaleTimeString('tr-TR')}</p>
+              <p className="text-xs">{getCacheStatus()}</p>
+            </div>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Button 
+            onClick={handleManualRefresh}
+            variant="outline"
+            disabled={loading}
+            className="flex items-center gap-2"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            Yenile
+          </Button>
+          <Button className="bg-[#075E54] hover:bg-[#064e44] text-white">
+            <Plus className="h-5 w-5 mr-2" />Yeni WhatsApp Numarası Ekle
+          </Button>
+        </div>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
         {sessions.map(session => (

@@ -58,7 +58,12 @@ interface SessionStoreState {
   messages: { [chatId: string]: APIMessage[] };
   websocket: WebSocket | null;
   chatWebsocket: WebSocket | null;
+  lastFetchTime: number | null;
+  initialized: boolean;
+  websocketConnected: boolean;
+  chatWebsocketConnected: boolean;
   fetchSessions: () => Promise<void>;
+  forceRefresh: () => Promise<void>;
   setSessions: (sessions: APISession[]) => void;
   setSessionCountInfo: (info: SessionCountInfo) => void;
   fetchOverview: (sessionId: string) => Promise<APIChatOverview[] | undefined>;
@@ -82,7 +87,23 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
     messages: {},
     websocket: null,
     chatWebsocket: null,
+    lastFetchTime: null,
+    initialized: false,
+    websocketConnected: false,
+    chatWebsocketConnected: false,
     fetchSessions: async () => {
+      const { lastFetchTime } = get();
+      const now = Date.now();
+      const cacheDuration = 3600000; // 1 saat cache süresi (WebSocket'ler real-time güncellemeler sağlıyor)
+      
+      // Cache hala geçerliyse fetch yapma
+      if (lastFetchTime && (now - lastFetchTime) < cacheDuration) {
+        const remainingTime = Math.ceil((cacheDuration - (now - lastFetchTime)) / 1000);
+        console.log(`Session cache hala geçerli (${Math.floor(remainingTime / 60)}dk ${remainingTime % 60}s kaldı), fetch atlanıyor. WebSocket'ler real-time güncellemeler sağlıyor.`);
+        return;
+      }
+      
+      console.log('Session verileri fetch ediliyor...');
       set({ loading: true, error: null });
       try {
         const sessionRes = await authenticatedFetch('/sessions/');
@@ -91,7 +112,24 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
         if (!countRes.ok) throw new Error('Session limit verisi alınamadı');
         const sessions = await sessionRes.json();
         const sessionCountInfo = await countRes.json();
-        set({ sessions, sessionCountInfo, loading: false });
+        set({ sessions, sessionCountInfo, loading: false, lastFetchTime: now, initialized: true });
+        console.log(`${sessions.length} session başarıyla yüklendi`);
+      } catch (e: any) {
+        set({ error: e.message, loading: false });
+      }
+    },
+    forceRefresh: async () => {
+      console.log('Manuel session refresh başlatılıyor...');
+      set({ loading: true, error: null });
+      try {
+        const sessionRes = await authenticatedFetch('/sessions/');
+        const countRes = await authenticatedFetch('/company/session-counts');
+        if (!sessionRes.ok) throw new Error('Session verileri alınamadı');
+        if (!countRes.ok) throw new Error('Session limit verisi alınamadı');
+        const sessions = await sessionRes.json();
+        const sessionCountInfo = await countRes.json();
+        set({ sessions, sessionCountInfo, loading: false, lastFetchTime: Date.now(), initialized: true });
+        console.log(`${sessions.length} session manuel olarak yenilendi`);
       } catch (e: any) {
         set({ error: e.message, loading: false });
       }
@@ -129,15 +167,17 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
     },
     subscribeToSessionStatus: () => {
       const { websocket } = get();
-      if (websocket) {
+      if (websocket && websocket.readyState === WebSocket.OPEN) {
+        console.log('Mevcut Session Status WebSocket kapatılıyor...');
         websocket.close();
       }
       
       const ws = new WebSocket('ws://localhost:8001/api/v1/ws/session-status');
-      console.log('Session Status WebSocket opened');
+      console.log('Session Status WebSocket açılıyor...');
       
       ws.onopen = () => {
         console.log('Session Status WebSocket bağlantısı açıldı');
+        set({ websocketConnected: true });
         // Mevcut session'lara subscribe ol
         const sessions = get().sessions;
         sessions.forEach((session) => {
@@ -205,26 +245,30 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
       };
       
       ws.onerror = (e) => {
-        set({ error: 'Session Status WebSocket bağlantı hatası' });
+        console.error('Session Status WebSocket hatası:', e);
+        set({ error: 'Session Status WebSocket bağlantı hatası', websocketConnected: false });
       };
       
       ws.onclose = () => {
-        // İsteğe bağlı: Otomatik reconnect veya kullanıcıya bilgi verilebilir
+        console.log('Session Status WebSocket bağlantısı kapandı');
+        set({ websocketConnected: false });
       };
       
       set({ websocket: ws });
     },
     subscribeToChatOverview: () => {
       const { chatWebsocket } = get();
-      if (chatWebsocket) {
+      if (chatWebsocket && chatWebsocket.readyState === WebSocket.OPEN) {
+        console.log('Mevcut Chat Overview WebSocket kapatılıyor...');
         chatWebsocket.close();
       }
       
       const ws = new WebSocket('ws://localhost:8001/api/v1/ws/chat-overview');
-      console.log('Chat Overview WebSocket opened');
+      console.log('Chat Overview WebSocket açılıyor...');
       
       ws.onopen = () => {
         console.log('Chat Overview WebSocket bağlantısı açıldı');
+        set({ chatWebsocketConnected: true });
         // Mevcut session'lara subscribe ol
         const sessions = get().sessions;
         sessions.forEach((session) => {
@@ -410,11 +454,13 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
       };
       
       ws.onerror = (e) => {
-        set({ error: 'Chat Overview WebSocket bağlantı hatası' });
+        console.error('Chat Overview WebSocket hatası:', e);
+        set({ error: 'Chat Overview WebSocket bağlantı hatası', chatWebsocketConnected: false });
       };
       
       ws.onclose = () => {
-        // İsteğe bağlı: Otomatik reconnect
+        console.log('Chat Overview WebSocket bağlantısı kapandı');
+        set({ chatWebsocketConnected: false });
       };
       
       set({ chatWebsocket: ws });

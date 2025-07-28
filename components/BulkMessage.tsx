@@ -116,6 +116,7 @@ export default function BulkMessage() {
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [showJobDetails, setShowJobDetails] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [jobDetailPollingInterval, setJobDetailPollingInterval] = useState<NodeJS.Timeout | null>(null);
 
   // useSessionStore'dan session'ları al
   const { sessions: apiSessions, loading: sessionsLoading, fetchSessions } = useSessionStore();
@@ -170,6 +171,15 @@ export default function BulkMessage() {
 
     return () => clearInterval(jobsInterval);
   }, [jobs]);
+
+  // Component unmount olduğunda polling'i temizle
+  useEffect(() => {
+    return () => {
+      if (jobDetailPollingInterval) {
+        clearInterval(jobDetailPollingInterval);
+      }
+    };
+  }, [jobDetailPollingInterval]);
 
 
   // Session seçimi handle et
@@ -246,6 +256,28 @@ export default function BulkMessage() {
     try {
       await authenticatedFetch(`/job-cancel/${jobId}`, { method: 'POST' });
       setCancelling(false);
+      
+      // Job detaylarını güncelle
+      if (selectedJob && selectedJob.id === jobId) {
+        try {
+          const response = await authenticatedFetch(`/jobs/${jobId}`);
+          if (response.ok) {
+            const updatedJob: Job = await response.json();
+            setSelectedJob(updatedJob);
+            
+            // Eğer job iptal edildiyse polling'i durdur
+            if (updatedJob.cancelled) {
+              if (jobDetailPollingInterval) {
+                clearInterval(jobDetailPollingInterval);
+                setJobDetailPollingInterval(null);
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Error updating job details after cancel:', error);
+        }
+      }
+      
       // Jobs listesini güncelle
       setTimeout(() => fetchJobs(false), 1000);
     } catch (err) {
@@ -258,6 +290,50 @@ export default function BulkMessage() {
   const showJobDetailsModal = (job: Job) => {
     setSelectedJob(job);
     setShowJobDetails(true);
+    
+    // Eğer job pending ise polling başlat
+    if (job.status === 'pending' && !job.finished) {
+      startJobDetailPolling(job.id, job.message_delay_seconds);
+    }
+  };
+
+  // Job detayları için polling başlat
+  const startJobDetailPolling = (jobId: string, delaySeconds: number) => {
+    // Önceki polling'i temizle
+    if (jobDetailPollingInterval) {
+      clearInterval(jobDetailPollingInterval);
+    }
+    
+    // Yeni polling interval'ı başlat
+    const interval = setInterval(async () => {
+      try {
+        const response = await authenticatedFetch(`/jobs/${jobId}`);
+        if (response.ok) {
+          const updatedJob: Job = await response.json();
+          setSelectedJob(updatedJob);
+          
+          // Eğer job tamamlandı veya iptal edildiyse polling'i durdur
+          if (updatedJob.finished || updatedJob.cancelled || updatedJob.status !== 'pending') {
+            clearInterval(interval);
+            setJobDetailPollingInterval(null);
+          }
+        }
+      } catch (error) {
+        console.error('Job detail polling error:', error);
+      }
+    }, Math.max(1000, delaySeconds * 1000)); // En az 1 saniye, delay_seconds kadar bekle
+    
+    setJobDetailPollingInterval(interval);
+  };
+
+  // Job detayları modal'ı kapatıldığında polling'i durdur
+  const handleJobDetailsClose = () => {
+    if (jobDetailPollingInterval) {
+      clearInterval(jobDetailPollingInterval);
+      setJobDetailPollingInterval(null);
+    }
+    setShowJobDetails(false);
+    setSelectedJob(null);
   };
 
   // Job durumuna göre badge rengi
@@ -289,10 +365,17 @@ export default function BulkMessage() {
         phone = result.to.replace(/@.*/, '');
       }
       
-      // Başarı durumu
+      // Başarı durumu - her result'ın kendi durumuna göre belirle
       let status: 'success' | 'pending' | 'error' = 'pending';
-      if (result.error) status = 'error';
-      else if (job.status === 'completed') status = 'success';
+      if (result.error) {
+        status = 'error';
+      } else if (result._data && result._data.id && result._data.body) {
+        // Eğer result'da mesaj verisi varsa başarılı
+        status = 'success';
+      } else if (job.status === 'completed') {
+        // Job tamamlandıysa ve hata yoksa başarılı
+        status = 'success';
+      }
       
       // Mesaj içeriği
       let text = result._data?.body || result.body || '';
@@ -725,7 +808,7 @@ export default function BulkMessage() {
       </div>
 
       {/* Job Detayları Modal */}
-      <Dialog open={showJobDetails} onOpenChange={setShowJobDetails}>
+      <Dialog open={showJobDetails} onOpenChange={handleJobDetailsClose}>
         <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <div className="flex items-center justify-between">

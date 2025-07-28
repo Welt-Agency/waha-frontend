@@ -153,28 +153,64 @@ export default function ConversationInbox() {
   useEffect(() => {
     if (selectedSession) {
       setLoading(true);
-      if (overviews[selectedSession]) {
-        setContacts(formatContacts(overviews[selectedSession], selectedSession));
-        setLoading(false);
-      } else {
-        fetchOverview(selectedSession).then((data) => {
-          if (data) {
-            setContacts(formatContacts(data, selectedSession));
-            // Sadece ilk fetch'te prefetch başlat
-            prefetchAllOverviews(selectedSession);
+      
+      if (selectedSession === 'ALL') {
+        // Tüm session'ların overview'larını birleştir
+        const allContacts: Contact[] = [];
+        const sessionPromises = sessions.map(async (session) => {
+          if (overviews[session.name]) {
+            const sessionContacts = formatContacts(overviews[session.name], session.name);
+            allContacts.push(...sessionContacts);
+          } else {
+            const data = await fetchOverview(session.name);
+            if (data) {
+              const sessionContacts = formatContacts(data, session.name);
+              allContacts.push(...sessionContacts);
+            }
           }
+        });
+        
+        Promise.all(sessionPromises).then(() => {
+          setContacts(allContacts);
           setLoading(false);
         });
+      } else {
+        if (overviews[selectedSession]) {
+          setContacts(formatContacts(overviews[selectedSession], selectedSession));
+          setLoading(false);
+        } else {
+          fetchOverview(selectedSession).then((data) => {
+            if (data) {
+              setContacts(formatContacts(data, selectedSession));
+              // Sadece ilk fetch'te prefetch başlat
+              prefetchAllOverviews(selectedSession);
+            }
+            setLoading(false);
+          });
+        }
       }
     }
-  }, [selectedSession, overviews, fetchOverview, prefetchAllOverviews]);
+  }, [selectedSession, overviews, fetchOverview, prefetchAllOverviews, sessions]);
 
   // Overviews değiştiğinde contacts'i güncelle
   useEffect(() => {
-    if (selectedSession && overviews[selectedSession]) {
-      setContacts(formatContacts(overviews[selectedSession], selectedSession));
+    if (selectedSession) {
+      if (selectedSession === 'ALL') {
+        // Tüm session'ların overview'larını birleştir
+        const allContacts: Contact[] = [];
+        sessions.forEach((session) => {
+          if (overviews[session.name]) {
+            const sessionContacts = formatContacts(overviews[session.name], session.name);
+            allContacts.push(...sessionContacts);
+          }
+        });
+        
+        setContacts(allContacts);
+      } else if (overviews[selectedSession]) {
+        setContacts(formatContacts(overviews[selectedSession], selectedSession));
+      }
     }
-  }, [overviews, selectedSession]);
+  }, [overviews, selectedSession, sessions]);
 
   // Store'daki messages değiştiğinde UI messages'i güncelle
   useEffect(() => {
@@ -222,17 +258,22 @@ export default function ConversationInbox() {
       const displayName = chat.name || phoneNumber;
       const lastMessageTime = new Date(chat.lastMessage.timestamp * 1000);
       const timeAgo = getTimeAgo(lastMessageTime);
+      
+      // session_name field'ını kullan, yoksa sessionId'yi kullan
+      const actualSessionId = chat.session_name || sessionId;
+      const sessionData = sessions.find(s => s.name === actualSessionId);
+      
       return {
-        id: `${sessionId}_${chat.id}`,
+        id: `${actualSessionId}_${chat.id}`,
         name: displayName,
         phone: `+${phoneNumber}`,
         avatar: chat.picture || undefined,
         lastMessage: chat.lastMessage.body || 'Media mesajı',
         timestamp: timeAgo,
         unreadCount: 0, // API'den bu bilgi gelmiyorsa varsayılan 0
-        sessionLabel: sessions.find(s => s.name === sessionId)?.me?.pushName || sessionId,
-        sessionPhone: sessions.find(s => s.name === sessionId)?.me?.id?.replace('@c.us', '') || '',
-        sessionId: sessionId,
+        sessionLabel: sessionData?.me?.pushName || actualSessionId,
+        sessionPhone: sessionData?.me?.id?.replace('@c.us', '') || '',
+        sessionId: actualSessionId,
         isOnline: false,
         isPinned: false,
         isMuted: false,

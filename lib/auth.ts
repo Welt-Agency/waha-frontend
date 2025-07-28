@@ -31,7 +31,7 @@ export const getUserInfo = () => {
 // Get base URL based on user type
 export const getBaseUrl = (): string => {
   const userType = localStorage.getItem('user_type');
-  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8001/api/v1';
+  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://waha-backend.onrender.com/api/v1';
   
   if (userType === 'admin') {
     return `${baseUrl}/admin/waha`;
@@ -41,7 +41,7 @@ export const getBaseUrl = (): string => {
 };
 
 export const getAuthBaseUrl = (): string => {
-  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8001/api/v1';
+  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://waha-backend.onrender.com/api/v1';
   return `${baseUrl}/auth`;
 };
 
@@ -54,7 +54,7 @@ export const validateToken = async (): Promise<boolean> => {
   }
 
   try {
-    const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8001/api/v1';
+    const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://waha-backend.onrender.com/api/v1';
     const response = await fetch(`${baseUrl}/auth/me`, {
       method: 'GET',
       headers: {
@@ -158,7 +158,7 @@ export const refreshToken = async (): Promise<boolean> => {
   }
 
   try {
-    const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8001/api/v1';
+    const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://waha-backend.onrender.com/api/v1';
     const response = await fetch(`${baseUrl}/auth/refresh`, {
       method: 'POST',
       headers: {

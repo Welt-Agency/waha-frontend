@@ -172,7 +172,9 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
         websocket.close();
       }
       
-      const ws = new WebSocket('ws://localhost:8001/api/v1/ws/session-status');
+      const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://waha-backend.onrender.com/api/v1';
+      const wsUrl = baseUrl.replace('https://', 'wss://').replace('http://', 'ws://');
+      const ws = new WebSocket(`${wsUrl}/ws/session-status`);
       console.log('Session Status WebSocket açılıyor...');
       
       ws.onopen = () => {
@@ -263,7 +265,9 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
         chatWebsocket.close();
       }
       
-      const ws = new WebSocket('ws://localhost:8001/api/v1/ws/chat-overview');
+      const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://waha-backend.onrender.com/api/v1';
+      const wsUrl = baseUrl.replace('https://', 'wss://').replace('http://', 'ws://');
+      const ws = new WebSocket(`${wsUrl}/ws/chat-overview`);
       console.log('Chat Overview WebSocket açılıyor...');
       
       ws.onopen = () => {

@@ -811,7 +811,7 @@ export default function BulkMessage() {
       <Dialog open={showJobDetails} onOpenChange={handleJobDetailsClose}>
         <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between mb-4">
               <DialogTitle>Job Detayları</DialogTitle>
               {selectedJob && selectedJob.status === 'pending' && !selectedJob.finished && !selectedJob.cancelled && (
                 <Button
@@ -819,7 +819,7 @@ export default function BulkMessage() {
                   size="sm"
                   onClick={() => handleCancelJob(selectedJob.id)}
                   disabled={cancelling}
-                  className="text-red-600 border-red-200 hover:bg-red-50"
+                  className="text-red-600 border-red-200 hover:bg-red-50 ml-4"
                 >
                   {cancelling ? (
                     <>

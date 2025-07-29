@@ -284,7 +284,7 @@ export default function ConversationInbox() {
         avatar: chat.picture || undefined,
         lastMessage: chat.lastMessage.body || 'Media mesajı',
         timestamp: timeAgo,
-        unreadCount: 0, // API'den bu bilgi gelmiyorsa varsayılan 0
+        unreadCount: (chat.lastMessage.ack === 1 && chat.lastMessage.fromMe === false) ? 1 : 0, // fromMe: false ve ack: 1 ise okunmamış
         sessionLabel: sessionData?.me?.pushName || actualSessionId,
         sessionPhone: sessionData?.me?.id?.replace('@c.us', '') || '',
         sessionId: actualSessionId,
@@ -430,8 +430,8 @@ export default function ConversationInbox() {
     
     switch (filterType) {
       case 'unread':
-        // Sadece ack'si 2 olanlar (yani okunmamışlar)
-        return matchesSearch && contact.lastMessageAck === 2 && contact.lastMessageId.startsWith('false');
+        // fromMe: false ve ack: 1 olan mesajlar (okunmamış)
+        return matchesSearch && contact.lastMessageAck === 1 && contact.lastMessageId.startsWith('false');
       case 'pinned':
         return matchesSearch && contact.isPinned;
       case 'archived':
@@ -628,7 +628,7 @@ export default function ConversationInbox() {
           <div className="flex flex-wrap gap-1">
             {[
               { key: 'all', label: 'Tümü', count: contacts.length },
-              { key: 'unread', label: 'Okunmamış', count: contacts.filter(c => c.lastMessageAck === 2 && c.lastMessageId.startsWith('false')).length },
+              { key: 'unread', label: 'Okunmamış', count: contacts.filter(c => c.lastMessageAck === 1 && c.lastMessageId.startsWith('false')).length },
               { key: 'pinned', label: 'Sabitlenmiş', count: contacts.filter(c => c.isPinned).length },
               { key: 'archived', label: 'Arşiv', count: contacts.filter(c => c.isArchived).length }
             ].map((filter) => (
@@ -718,8 +718,8 @@ export default function ConversationInbox() {
                           <div className="absolute -bottom-0.5 -right-0.5 h-4 w-4 bg-green-500 border-2 border-white rounded-full"></div>
                         )}
                         {contact.unreadCount > 0 && (
-                          <div className="absolute -top-1 -right-1 h-5 w-5 bg-[#25D366] text-white text-xs font-bold rounded-full flex items-center justify-center shadow-sm">
-                            {contact.unreadCount > 9 ? '9+' : contact.unreadCount}
+                          <div className="absolute -top-1 -right-1 h-6 px-2 bg-[#25D366] text-white text-xs font-bold rounded-full flex items-center justify-center shadow-sm">
+                            Yeni
                           </div>
                         )}
                       </div>

@@ -79,75 +79,85 @@ export const createAuthHeaders = (): HeadersInit => {
   };
 };
 
-// Make authenticated API call with user-type specific base URL
-export const authenticatedFetch = async (
-  endpoint: string, 
-  options: RequestInit = {}
-): Promise<Response> => {
-  const baseUrl = getBaseUrl();
-  const url = `${baseUrl}${endpoint}`;
-  const headers = createAuthHeaders();
-  
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      ...headers,
-      ...options.headers,
-    },
-  });
+  // Make authenticated API call with user-type specific base URL
+  export const authenticatedFetch = async (
+    endpoint: string, 
+    options: RequestInit = {}
+  ): Promise<Response> => {
+    const baseUrl = getBaseUrl();
+    const url = `${baseUrl}${endpoint}`;
+    const headers = createAuthHeaders();
+    
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        ...headers,
+        ...options.headers,
+      },
+    });
 
-  // If token is expired, try to refresh
-  if (response.status === 401) {
-    const refreshed = await refreshToken();
-    if (refreshed) {
-      // Retry the request with new token
-      const newHeaders = createAuthHeaders();
-      return fetch(url, {
-        ...options,
-        headers: {
-          ...newHeaders,
-          ...options.headers,
-        },
-      });
+    // If token is expired, try to refresh
+    if (response.status === 401) {
+      console.log('Token expired, attempting refresh...');
+      const refreshed = await refreshToken();
+      if (refreshed) {
+        console.log('Token refreshed successfully, retrying request...');
+        // Retry the request with new token
+        const newHeaders = createAuthHeaders();
+        return fetch(url, {
+          ...options,
+          headers: {
+            ...newHeaders,
+            ...options.headers,
+          },
+        });
+      } else {
+        console.log('Token refresh failed, user will be redirected to login');
+        // refreshToken fonksiyonu zaten login'e yönlendiriyor
+      }
     }
-  }
 
-  return response;
-};
+    return response;
+  };
 
-// Make authenticated API call with custom URL (for auth endpoints)
-export const authenticatedFetchCustom = async (
-  url: string, 
-  options: RequestInit = {}
-): Promise<Response> => {
-  const headers = createAuthHeaders();
-  
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      ...headers,
-      ...options.headers,
-    },
-  });
+  // Make authenticated API call with custom URL (for auth endpoints)
+  export const authenticatedFetchCustom = async (
+    url: string, 
+    options: RequestInit = {}
+  ): Promise<Response> => {
+    const headers = createAuthHeaders();
+    
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        ...headers,
+        ...options.headers,
+      },
+    });
 
-  // If token is expired, try to refresh
-  if (response.status === 401) {
-    const refreshed = await refreshToken();
-    if (refreshed) {
-      // Retry the request with new token
-      const newHeaders = createAuthHeaders();
-      return fetch(url, {
-        ...options,
-        headers: {
-          ...newHeaders,
-          ...options.headers,
-        },
-      });
+    // If token is expired, try to refresh
+    if (response.status === 401) {
+      console.log('Token expired, attempting refresh...');
+      const refreshed = await refreshToken();
+      if (refreshed) {
+        console.log('Token refreshed successfully, retrying request...');
+        // Retry the request with new token
+        const newHeaders = createAuthHeaders();
+        return fetch(url, {
+          ...options,
+          headers: {
+            ...newHeaders,
+            ...options.headers,
+          },
+        });
+      } else {
+        console.log('Token refresh failed, user will be redirected to login');
+        // refreshToken fonksiyonu zaten login'e yönlendiriyor
+      }
     }
-  }
 
-  return response;
-};
+    return response;
+  };
 
 // Refresh access token
 export const refreshToken = async (): Promise<boolean> => {
@@ -171,8 +181,21 @@ export const refreshToken = async (): Promise<boolean> => {
 
     if (response.ok) {
       const data = await response.json();
+      console.log('Token refresh response:', data);
       localStorage.setItem('access_token', data.access_token);
+      // Refresh token da güncellenebilir
+      if (data.refresh_token) {
+        localStorage.setItem('refresh_token', data.refresh_token);
+      }
       return true;
+    } else if (response.status === 401) {
+      // Refresh token da geçersiz, kullanıcıyı login'e yönlendir
+      console.log('Refresh token expired, redirecting to login...');
+      clearAuth();
+      if (typeof window !== 'undefined') {
+        window.location.href = '/login';
+      }
+      return false;
     }
   } catch (error) {
     console.error('Token refresh failed:', error);

@@ -113,9 +113,9 @@ export default function ConversationInbox() {
   } = useSessionStore();
 
   // Cache'i bypass eden overview fetch fonksiyonu
-  const fetchOverviewForce = async (sessionId: string) => {
+  const fetchOverviewForce = async (sessionId: string, limit: number = 25, offset: number = 0) => {
     try {
-      const res = await authenticatedFetch(`/chats/${sessionId}/overview`);
+      const res = await authenticatedFetch(`/chats/${sessionId}/overview?limit=${limit}&offset=${offset}`);
       if (!res.ok) throw new Error('Overview alınamadı');
       const data = await res.json();
       return data;
@@ -139,6 +139,14 @@ export default function ConversationInbox() {
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sendingMessage, setSendingMessage] = useState(false);
+  const [currentOffset, setCurrentOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [messagesOffset, setMessagesOffset] = useState(0);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
+  const [loadingMoreMessages, setLoadingMoreMessages] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
+  const [typingTimeout, setTypingTimeout] = useState<NodeJS.Timeout | null>(null);
 
   // On mount: fetch sessions if not loaded
   useEffect(() => {
@@ -174,7 +182,7 @@ export default function ConversationInbox() {
         // Tüm session'lar için force fetch yap
         const sessionPromises = sessions.map(async (session) => {
           try {
-            const data = await fetchOverviewForce(session.name);
+            const data = await fetchOverviewForce(session.name, 25, 0); // Her session'dan ilk 25 chat
             if (data) {
               const sessionContacts = formatContacts(data, session.name);
               allContacts.push(...sessionContacts);
@@ -193,7 +201,7 @@ export default function ConversationInbox() {
           setContacts(formatContacts(overviews[selectedSession], selectedSession));
           setLoading(false);
         } else {
-          fetchOverview(selectedSession).then((data) => {
+          fetchOverview(selectedSession, 25, 0).then((data) => {
             if (data) {
               setContacts(formatContacts(data, selectedSession));
               // Sadece ilk fetch'te prefetch başlat
@@ -209,22 +217,59 @@ export default function ConversationInbox() {
   // Overviews değiştiğinde contacts'i güncelle
   useEffect(() => {
     if (selectedSession) {
+      console.log('=== OVERVIEWS CHANGED ===');
+      console.log('Selected session:', selectedSession);
+      console.log('Current overviews keys:', Object.keys(overviews));
+      console.log('Current overviews:', overviews);
+      
       if (selectedSession === 'ALL') {
         // Tüm session'ların overview'larını birleştir
         const allContacts: Contact[] = [];
         sessions.forEach((session) => {
           if (overviews[session.name]) {
+            console.log(`Processing session ${session.name} with ${overviews[session.name].length} chats`);
             const sessionContacts = formatContacts(overviews[session.name], session.name);
             allContacts.push(...sessionContacts);
           }
         });
         
+        console.log('Total contacts after merge:', allContacts.length);
         setContacts(allContacts);
+        console.log('Updated ALL contacts:', allContacts.length);
       } else if (overviews[selectedSession]) {
-        setContacts(formatContacts(overviews[selectedSession], selectedSession));
+        console.log(`Processing single session ${selectedSession} with ${overviews[selectedSession].length} chats`);
+        const newContacts = formatContacts(overviews[selectedSession], selectedSession);
+        console.log('Formatted contacts:', newContacts.length);
+        setContacts(newContacts);
+        console.log('Updated contacts for session:', selectedSession, newContacts.length);
+      } else {
+        console.log('No overviews found for session:', selectedSession);
       }
+      console.log('=== END OVERVIEWS CHANGED ===');
     }
   }, [overviews, selectedSession, sessions]);
+
+  // Debug: Overviews değişikliklerini takip et
+  useEffect(() => {
+    console.log('Overviews state changed:', {
+      keys: Object.keys(overviews),
+      selectedSession,
+      hasOverviews: selectedSession ? !!overviews[selectedSession] : false,
+      overviewCount: selectedSession && overviews[selectedSession] ? overviews[selectedSession].length : 0,
+      contactsCount: contacts.length
+    });
+    
+    // Socket'ten gelen overview'ların sayısını takip et
+    if (selectedSession && overviews[selectedSession]) {
+      const sessionOverviews = overviews[selectedSession];
+      console.log(`Session ${selectedSession} has ${sessionOverviews.length} overviews and ${contacts.length} contacts`);
+      
+      // Eğer overview sayısı contact sayısından fazlaysa, yeni overview'lar gelmiş demektir
+      if (sessionOverviews.length > contacts.length) {
+        console.log(`New overviews detected: ${sessionOverviews.length - contacts.length} new chats`);
+      }
+    }
+  }, [overviews, selectedSession, contacts.length]);
 
   // Store'daki messages değiştiğinde UI messages'i güncelle
   useEffect(() => {
@@ -277,14 +322,17 @@ export default function ConversationInbox() {
       const actualSessionId = chat.session_name || sessionId;
       const sessionData = sessions.find(s => s.name === actualSessionId);
       
+      // Yeni yapıda unreadCount backend'den geliyor, yoksa hesapla
+      const unreadCount = chat.unreadCount || (chat.lastMessage.ack === 1 && chat.lastMessage.fromMe === false) ? 1 : 0;
+      
       return {
         id: `${actualSessionId}_${chat.id}`,
         name: displayName,
         phone: `+${phoneNumber}`,
-        avatar: chat.picture || undefined,
+        avatar: chat.picture || undefined, // Picture yoksa undefined, mevcut avatar korunur
         lastMessage: chat.lastMessage.body || 'Media mesajı',
         timestamp: timeAgo,
-        unreadCount: (chat.lastMessage.ack === 1 && chat.lastMessage.fromMe === false) ? 1 : 0, // fromMe: false ve ack: 1 ise okunmamış
+        unreadCount: unreadCount,
         sessionLabel: sessionData?.me?.pushName || actualSessionId,
         sessionPhone: sessionData?.me?.id?.replace('@c.us', '') || '',
         sessionId: actualSessionId,
@@ -304,7 +352,7 @@ export default function ConversationInbox() {
   const fetchMessages = async (sessionId: string, chatId: string, contactId: string) => {
     try {
       setMessagesLoading(true);
-      const response = await authenticatedFetch(`/chats/${sessionId}/${chatId}/messages`);
+      const response = await authenticatedFetch(`/chats/${sessionId}/${chatId}/messages?limit=50&offset=0`);
       if (!response.ok) throw new Error('Mesajlar alınamadı');
       
       const apiMessages: APIMessage[] = await response.json();
@@ -313,6 +361,26 @@ export default function ConversationInbox() {
       apiMessages.forEach(msg => {
         addMessage(chatId, msg);
       });
+      
+      // İlk yüklemede daha fazla mesaj var mı kontrol et
+      setHasMoreMessages(apiMessages.length === 50);
+      
+      // İlk yüklemede en alta scroll et
+      setTimeout(() => {
+        const messagesContainer = document.querySelector('.messages-container') as HTMLElement;
+        if (messagesContainer) {
+          messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+        
+        // Okunmamış mesajları okundu olarak işaretle
+        const unreadMessages = apiMessages
+          .filter(msg => !msg.fromMe && msg.ack < 3)
+          .map(msg => msg.id);
+        
+        if (unreadMessages.length > 0) {
+          markMessagesAsSeen(unreadMessages);
+        }
+      }, 100);
       
     } catch (err) {
       console.error('Error fetching messages:', err);
@@ -410,6 +478,9 @@ export default function ConversationInbox() {
     if (selectedContact) {
       const contact = contacts.find(c => c.id === selectedContact);
       if (contact) {
+        // Mesaj offset'ini sıfırla
+        setMessagesOffset(0);
+        setHasMoreMessages(true);
         // Mesajları fetch et
         fetchMessages(contact.sessionId, contact.rawChatId, contact.id);
       }
@@ -422,6 +493,8 @@ export default function ConversationInbox() {
     setSelectedContact(null);
     setMessages([]);
     setAllSessionsMode(newSessionId === 'ALL');
+    setCurrentOffset(0);
+    setHasMore(true);
   };
 
   const filteredContacts = contacts.filter(contact => {
@@ -431,7 +504,7 @@ export default function ConversationInbox() {
     switch (filterType) {
       case 'unread':
         // fromMe: false ve ack: 1 olan mesajlar (okunmamış)
-        return matchesSearch && contact.lastMessageAck === 1 && contact.lastMessageId.startsWith('false');
+        return matchesSearch && (contact.lastMessageAck === 1) && contact.lastMessageId.startsWith('false');
       case 'pinned':
         return matchesSearch && contact.isPinned;
       case 'archived':
@@ -509,6 +582,177 @@ export default function ConversationInbox() {
 
   const getInitials = (name: string) => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase();
+  };
+
+  // Component unmount olduğunda cleanup
+  useEffect(() => {
+    return () => {
+      if (typingTimeout) {
+        clearTimeout(typingTimeout);
+      }
+    };
+  }, [typingTimeout]);
+
+  // Scroll event handler
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    const threshold = 100; // 100px kala yükle
+    
+    if (scrollHeight - scrollTop - clientHeight < threshold && 
+        !loadingMore && 
+        hasMore && 
+        selectedSession !== 'ALL') {
+      loadMoreContacts();
+    }
+  };
+
+  // Daha fazla contact yükle
+  const loadMoreContacts = async () => {
+    if (loadingMore || !hasMore || selectedSession === 'ALL') return;
+    
+    setLoadingMore(true);
+    try {
+      const newOffset = currentOffset + 50;
+      const data = await fetchOverviewForce(selectedSession, 50, newOffset);
+      
+      if (data && data.length > 0) {
+        const newContacts = formatContacts(data, selectedSession);
+        
+        // Yeni gelen contact'ları mevcut liste ile birleştir
+        setContacts(prev => {
+          const existingIds = new Set(prev.map(c => c.id));
+          const uniqueNewContacts = newContacts.filter(c => !existingIds.has(c.id));
+          return [...prev, ...uniqueNewContacts];
+        });
+        
+        setCurrentOffset(newOffset);
+        setHasMore(data.length === 50); // 50'den az gelirse daha fazla yok
+        console.log(`Loaded ${data.length} more contacts, total: ${contacts.length + data.length}`);
+      } else {
+        setHasMore(false);
+        console.log('No more contacts to load');
+      }
+    } catch (error) {
+      console.error('Error loading more contacts:', error);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  // Mesajlar için scroll handler
+  const handleMessagesScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop } = e.currentTarget;
+    const threshold = 200; // 200px kala yükle
+    
+    if (scrollTop < threshold && 
+        !loadingMoreMessages && 
+        hasMoreMessages && 
+        selectedContactData) {
+      loadMoreMessages();
+    }
+  };
+
+  // Mesajları okundu olarak işaretle
+  const markMessagesAsSeen = async (messageIds: string[]) => {
+    if (!selectedContactData || messageIds.length === 0) return;
+    
+    try {
+      await authenticatedFetch('/send-seen', {
+        method: 'POST',
+        body: JSON.stringify({
+          chatId: selectedContactData.rawChatId,
+          messageIds: messageIds,
+          participant: null,
+          session: selectedContactData.sessionId
+        })
+      });
+    } catch (error) {
+      console.error('Error marking messages as seen:', error);
+    }
+  };
+
+  // Yazıyor durumunu başlat
+  const startTyping = async () => {
+    if (!selectedContactData || isTyping) return;
+    
+    try {
+      await authenticatedFetch('/start-typing', {
+        method: 'POST',
+        body: JSON.stringify({
+          chatId: selectedContactData.rawChatId,
+          messageIds: [],
+          participant: null,
+          session: selectedContactData.sessionId
+        })
+      });
+      setIsTyping(true);
+    } catch (error) {
+      console.error('Error starting typing:', error);
+    }
+  };
+
+  // Yazıyor durumunu durdur
+  const stopTyping = async () => {
+    if (!selectedContactData || !isTyping) return;
+    
+    try {
+      await authenticatedFetch('/stop-typing', {
+        method: 'POST',
+        body: JSON.stringify({
+          chatId: selectedContactData.rawChatId,
+          messageIds: [],
+          participant: null,
+          session: selectedContactData.sessionId
+        })
+      });
+      setIsTyping(false);
+    } catch (error) {
+      console.error('Error stopping typing:', error);
+    }
+  };
+
+  // Daha fazla mesaj yükle
+  const loadMoreMessages = async () => {
+    if (loadingMoreMessages || !hasMoreMessages || !selectedContactData) return;
+    
+    setLoadingMoreMessages(true);
+    try {
+      const newOffset = messagesOffset + 50;
+      const response = await authenticatedFetch(`/chats/${selectedContactData.sessionId}/${selectedContactData.rawChatId}/messages?limit=50&offset=${newOffset}`);
+      
+      if (!response.ok) throw new Error('Mesajlar alınamadı');
+      
+      const apiMessages: APIMessage[] = await response.json();
+      
+      if (apiMessages && apiMessages.length > 0) {
+        // Mevcut scroll pozisyonunu kaydet
+        const messagesContainer = document.querySelector('.messages-container') as HTMLElement;
+        const scrollHeightBefore = messagesContainer?.scrollHeight || 0;
+        
+        // Store'a mesajları ekle
+        apiMessages.forEach(msg => {
+          addMessage(selectedContactData.rawChatId, msg);
+        });
+        
+        // Yeni mesajlar yüklendikten sonra scroll pozisyonunu ayarla
+        setTimeout(() => {
+          if (messagesContainer) {
+            const scrollHeightAfter = messagesContainer.scrollHeight;
+            const scrollDiff = scrollHeightAfter - scrollHeightBefore;
+            messagesContainer.scrollTop = scrollDiff;
+          }
+        }, 100);
+        
+        setMessagesOffset(newOffset);
+        setHasMoreMessages(apiMessages.length === 50); // 50'den az gelirse daha fazla yok
+      } else {
+        setHasMoreMessages(false);
+      }
+    } catch (error) {
+      console.error('Error loading more messages:', error);
+    } finally {
+      setLoadingMoreMessages(false);
+    }
   };
 
   return (
@@ -628,7 +872,7 @@ export default function ConversationInbox() {
           <div className="flex flex-wrap gap-1">
             {[
               { key: 'all', label: 'Tümü', count: contacts.length },
-              { key: 'unread', label: 'Okunmamış', count: contacts.filter(c => c.lastMessageAck === 1 && c.lastMessageId.startsWith('false')).length },
+              { key: 'unread', label: 'Okunmamış', count: contacts.filter(c => (c.lastMessageAck === 1)  && c.lastMessageId.startsWith('false')).length },
               { key: 'pinned', label: 'Sabitlenmiş', count: contacts.filter(c => c.isPinned).length },
               { key: 'archived', label: 'Arşiv', count: contacts.filter(c => c.isArchived).length }
             ].map((filter) => (
@@ -684,7 +928,7 @@ export default function ConversationInbox() {
 
         {/* Contacts List */}
         {!loading && !error && (
-          <div className="flex-1 overflow-y-auto bg-gray-50">
+          <div className="flex-1 overflow-y-auto bg-gray-50" onScroll={handleScroll}>
             {filteredContacts.length === 0 ? (
               <div className="p-6 text-center text-gray-500">
                 <MessageSquare className="h-12 w-12 text-gray-300 mx-auto mb-3" />
@@ -767,6 +1011,14 @@ export default function ConversationInbox() {
                     </div>
                   </div>
                 ))}
+                
+                {/* Loading More Indicator */}
+                {loadingMore && (
+                  <div className="flex items-center justify-center py-4">
+                    <RefreshCw className="h-5 w-5 animate-spin text-gray-400 mr-2" />
+                    <span className="text-sm text-gray-600">Daha fazla yükleniyor...</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -850,7 +1102,7 @@ export default function ConversationInbox() {
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gradient-to-b from-gray-50 to-white">
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gradient-to-b from-gray-50 to-white messages-container" onScroll={handleMessagesScroll}>
               {messagesLoading ? (
                 <div className="flex justify-center py-8">
                   <div className="flex items-center space-x-3 text-gray-500">
@@ -867,14 +1119,25 @@ export default function ConversationInbox() {
                   <p className="text-gray-500">İlk mesajı göndererek konuşmayı başlatın!</p>
                 </div>
               ) : (
-                contactMessages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={cn(
-                      "flex",
-                      message.isOutgoing ? "justify-end" : "justify-start"
-                    )}
-                  >
+                <>
+                  {/* Loading More Messages Indicator */}
+                  {loadingMoreMessages && (
+                    <div className="flex justify-center py-4">
+                      <div className="flex items-center space-x-3 text-gray-500">
+                        <RefreshCw className="h-5 w-5 animate-spin" />
+                        <span className="font-medium">Eski mesajlar yükleniyor...</span>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {contactMessages.map((message) => (
+                    <div
+                      key={message.id}
+                      className={cn(
+                        "flex",
+                        message.isOutgoing ? "justify-end" : "justify-start"
+                      )}
+                    >
                     <div
                       className={cn(
                         "max-w-xs lg:max-w-md px-4 py-3 rounded-2xl shadow-sm relative",
@@ -909,7 +1172,8 @@ export default function ConversationInbox() {
                       </div>
                     </div>
                   </div>
-                ))
+                ))}
+                </>
               )}
             </div>
 
@@ -927,11 +1191,42 @@ export default function ConversationInbox() {
                   <Textarea
                     placeholder="Mesaj yazın..."
                     value={messageInput}
-                    onChange={(e) => setMessageInput(e.target.value)}
+                    onChange={(e) => {
+                      setMessageInput(e.target.value);
+                      
+                      // Yazıyor durumunu başlat
+                      if (!isTyping) {
+                        startTyping();
+                      }
+                      
+                      // Önceki timeout'u temizle
+                      if (typingTimeout) {
+                        clearTimeout(typingTimeout);
+                      }
+                      
+                      // 2 saniye sonra yazıyor durumunu durdur
+                      const timeout = setTimeout(() => {
+                        stopTyping();
+                      }, 2000);
+                      
+                      setTypingTimeout(timeout);
+                    }}
                     onKeyPress={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
                         handleSendMessage();
+                      }
+                    }}
+                    onFocus={() => {
+                      if (messageInput.trim()) {
+                        startTyping();
+                      }
+                    }}
+                    onBlur={() => {
+                      stopTyping();
+                      if (typingTimeout) {
+                        clearTimeout(typingTimeout);
+                        setTypingTimeout(null);
                       }
                     }}
                     className="min-h-[44px] max-h-32 resize-none rounded-2xl border-gray-200 focus:border-[#075E54] focus:ring-[#075E54] pr-12"

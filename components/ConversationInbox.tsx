@@ -86,6 +86,7 @@ interface Message {
   contactId: string;
   content: string;
   timestamp: string;
+  rawTimestamp?: number; // Gerçek timestamp için
   isOutgoing: boolean;
   status: 'sent' | 'delivered' | 'read';
   type: 'text' | 'image' | 'document';
@@ -287,6 +288,11 @@ export default function ConversationInbox() {
       const contact = contacts.find(c => c.id === selectedContact);
       if (contact && storeMessages[contact.rawChatId]) {
         const apiMessages = storeMessages[contact.rawChatId];
+        
+        // Mevcut UI mesajlarını al
+        const currentMessages = messages.filter(m => m.contactId === selectedContact);
+        const currentMessageIds = new Set(currentMessages.map(m => m.rawId));
+        
         const formattedMessages: Message[] = apiMessages.map((msg: APIMessage) => {
           const messageTime = new Date(msg.timestamp * 1000);
           const timeString = messageTime.toLocaleTimeString('tr-TR', { 
@@ -308,6 +314,7 @@ export default function ConversationInbox() {
             contactId: selectedContact,
             content: msg.body,
             timestamp: timeString,
+            rawTimestamp: msg.timestamp * 1000, // Gerçek timestamp ekle
             isOutgoing: msg.fromMe,
             status: status,
             type: messageType,
@@ -315,6 +322,7 @@ export default function ConversationInbox() {
           };
         }).reverse();
         
+        // Tüm mesajları güncelle (store'dan gelen en güncel hali)
         setMessages(formattedMessages);
       }
     }
@@ -359,10 +367,10 @@ export default function ConversationInbox() {
   }
 
   // Fetch messages for a specific chat
-  const fetchMessages = async (sessionId: string, chatId: string, contactId: string) => {
+  const fetchMessages = async (sessionId: string, chatId: string, contactId: string, limit: number = 50, showLoading: boolean = true) => {
     try {
-      setMessagesLoading(true);
-      const response = await authenticatedFetch(`/chats/${sessionId}/${chatId}/messages?limit=50&offset=0`);
+      if (showLoading) setMessagesLoading(true);
+      const response = await authenticatedFetch(`/chats/${sessionId}/${chatId}/messages?limit=${limit}&offset=0`);
       if (!response.ok) throw new Error('Mesajlar alınamadı');
       
       const apiMessages: APIMessage[] = await response.json();
@@ -373,7 +381,7 @@ export default function ConversationInbox() {
       });
       
       // İlk yüklemede daha fazla mesaj var mı kontrol et
-      setHasMoreMessages(apiMessages.length === 50);
+      setHasMoreMessages(apiMessages.length === limit);
       
       // İlk yüklemede en alta scroll et
       setTimeout(() => {
@@ -395,7 +403,7 @@ export default function ConversationInbox() {
     } catch (err) {
       console.error('Error fetching messages:', err);
     } finally {
-      setMessagesLoading(false);
+      if (showLoading) setMessagesLoading(false);
     }
   };
 
@@ -429,48 +437,14 @@ export default function ConversationInbox() {
       const result = await response.json();
       console.log('Send message success:', result);
       
-      // Kendi gönderdiğimiz mesajı store'a ekle
-      // Webhook'tan gelmeyeceği için kalıcı olarak ekliyoruz
-      const sentMessage: APIMessage = {
-        id: result.id || `sent_${Date.now()}`,
-        timestamp: Math.floor(Date.now() / 1000),
-        from: sessions.find(s => s.name === sessionId)?.me?.id || '',
-        fromMe: true,
-        source: sessionId,
-        to: chatId,
-        participant: null,
-        body: text,
-        hasMedia: false,
-        media: null,
-        ack: 1, // sent
-        ackName: 'sent',
-        author: sessions.find(s => s.name === sessionId)?.me?.id || '',
-        location: null,
-        vCards: [],
-        _data: result,
-        replyTo: null
-      };
+      // Mesajı store'a manuel ekleme yapmıyoruz - backend'den gelecek
       
-      // Mesajı store'a ekle
-      addMessage(chatId, sentMessage);
-      
-      // UI'da mesajı hemen göster
-      const formattedMessage: Message = {
-        id: sentMessage.id,
-        contactId: selectedContact || '',
-        content: text,
-        timestamp: new Date(sentMessage.timestamp * 1000).toLocaleTimeString('tr-TR', { 
-          hour: '2-digit', 
-          minute: '2-digit' 
-        }),
-        isOutgoing: true,
-        status: 'sent',
-        type: 'text',
-        rawId: sentMessage.id
-      };
-      
-      // Mevcut mesajlara ekle (reversed olduğu için sona ekle)
-      setMessages(prev => [...prev, formattedMessage]);
+      // Mesaj gönderildikten sonra son 10 mesajı tekrar çek
+      if (selectedContactData) {
+        setTimeout(() => {
+          fetchMessages(selectedContactData.sessionId, selectedContactData.rawChatId, selectedContactData.id, 10, false);
+        }, 500); // 500ms bekle, backend'in işlemesi için
+      }
       
       // Overview'ı da güncelle (kendi mesajımız için)
       const currentSession = sessions.find(s => s.name === sessionId);
@@ -479,9 +453,9 @@ export default function ConversationInbox() {
           id: chatId,
           name: null, // Mevcut name korunacak
           lastMessage: {
-            id: sentMessage.id,
-            timestamp: sentMessage.timestamp,
-            from: sentMessage.from,
+            id: result.id || `sent_${Date.now()}`,
+            timestamp: Math.floor(Date.now() / 1000),
+            from: currentSession.me?.id || '',
             fromMe: true,
             source: sessionId,
             body: text,
@@ -605,7 +579,15 @@ export default function ConversationInbox() {
   });
 
   const selectedContactData = contacts.find(c => c.id === selectedContact);
-  const contactMessages = messages.filter(m => m.contactId === selectedContact);
+  const contactMessages = messages
+    .filter(m => m.contactId === selectedContact)
+    .sort((a, b) => {
+      // rawTimestamp varsa onu kullan, yoksa timestamp string'ini parse et
+      // En yeniden en eskiye doğru sırala (WhatsApp gibi)
+      const timeA = a.rawTimestamp || new Date(a.timestamp).getTime();
+      const timeB = b.rawTimestamp || new Date(b.timestamp).getTime();
+      return timeA - timeB; // En eski en üstte, en yeni en altta
+    });
 
   const handleSendMessage = async () => {
     if (!messageInput.trim() || !selectedContactData || sendingMessage) {

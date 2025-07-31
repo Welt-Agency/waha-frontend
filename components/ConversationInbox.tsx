@@ -77,7 +77,7 @@ interface Contact {
   isArchived: boolean;
   rawChatId: string;
   lastMessageAck: number; // Added for unread count
-  lastMessageId: string; // Added for unread count
+  lastMessageId: string; // Added for unread count - message ID for unread detection
   lastMessageTimestamp?: number;
 }
 
@@ -110,6 +110,8 @@ export default function ConversationInbox() {
     fetchOverview,
     prefetchAllOverviews,
     addMessage,
+    chatWebsocketConnected,
+    subscribeToChatOverview,
   } = useSessionStore();
 
   // Cache'i bypass eden overview fetch fonksiyonu
@@ -147,6 +149,7 @@ export default function ConversationInbox() {
   const [loadingMoreMessages, setLoadingMoreMessages] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [typingTimeout, setTypingTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [hasStartedTyping, setHasStartedTyping] = useState(false);
 
   // On mount: fetch sessions if not loaded
   useEffect(() => {
@@ -162,13 +165,13 @@ export default function ConversationInbox() {
     }
   }, [sessions, selectedSession]);
 
-  // Websocket başlatma - SessionManager'da zaten başlatılıyor
-  // useEffect(() => {
-  //   if (sessions.length > 0 && !websocketStarted) {
-  //     subscribeToChatOverview();
-  //     setWebsocketStarted(true);
-  //   }
-  // }, [sessions, websocketStarted, subscribeToChatOverview]);
+  // Websocket başlatma
+  useEffect(() => {
+    if (sessions.length > 0) {
+      console.log('Starting WebSocket connection...');
+      subscribeToChatOverview();
+    }
+  }, [sessions, subscribeToChatOverview]);
 
   // selectedSession değiştiğinde overview cache'de yoksa fetch et, ilk fetch'te prefetch başlat
   useEffect(() => {
@@ -251,6 +254,8 @@ export default function ConversationInbox() {
 
   // Debug: Overviews değişikliklerini takip et
   useEffect(() => {
+    console.log('=== OVERVIEWS STATE CHANGED ===');
+    console.log('WebSocket connected:', chatWebsocketConnected);
     console.log('Overviews state changed:', {
       keys: Object.keys(overviews),
       selectedSession,
@@ -268,7 +273,12 @@ export default function ConversationInbox() {
       if (sessionOverviews.length > contacts.length) {
         console.log(`New overviews detected: ${sessionOverviews.length - contacts.length} new chats`);
       }
+      
+      // Overview'ların detaylarını logla
+      console.log('Current overviews:', sessionOverviews.map(o => ({ id: o.id, name: o.name, lastMessage: o.lastMessage?.body })));
+      console.log('Current contacts:', contacts.map(c => ({ id: c.id, name: c.name, lastMessage: c.lastMessage })));
     }
+    console.log('=== END OVERVIEWS STATE CHANGED ===');
   }, [overviews, selectedSession, contacts.length]);
 
   // Store'daki messages değiştiğinde UI messages'i güncelle
@@ -342,7 +352,7 @@ export default function ConversationInbox() {
         isArchived: false,
         rawChatId: chat.id,
         lastMessageAck: chat.lastMessage.ack, // Added for unread count
-        lastMessageId: chat.lastMessage.id, // Added for unread count
+        lastMessageId: chat.lastMessage.id || '', // Added for unread count
         lastMessageTimestamp: chat.lastMessage.timestamp,
       };
     });
@@ -393,26 +403,36 @@ export default function ConversationInbox() {
   const sendMessage = async (chatId: string, sessionId: string, text: string) => {
     try {
       setSendingMessage(true);
-      const response = await authenticatedFetch('/send-text', {
+      
+      const requestBody = {
+        chatId: chatId,
+        reply_to: null,
+        text: text,
+        linkPreview: true,
+        linkPreviewHighQuality: false,
+        session: sessionId
+      };
+      
+      console.log('Sending message with payload:', requestBody);
+      
+      const response = await authenticatedFetch('/send-text/', {
         method: 'POST',
-        body: JSON.stringify({
-          chatId: chatId,
-          reply_to: null,
-          text: text,
-          linkPreview: true,
-          linkPreviewHighQuality: false,
-          session: sessionId
-        })
+        body: JSON.stringify(requestBody)
       });
       
-      if (!response.ok) throw new Error('Mesaj gönderilemedi');
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Send message error:', response.status, errorText);
+        throw new Error(`Mesaj gönderilemedi: ${response.status} - ${errorText}`);
+      }
       
       const result = await response.json();
+      console.log('Send message success:', result);
       
-      // Gönderilen mesajı store'a ekle (websocket'ten gelene kadar geçici olarak)
-      // Eğer websocket'ten aynı mesaj gelirse, bu geçici mesaj otomatik olarak güncellenecek
-      const tempMessage: APIMessage = {
-        id: result.id || `temp_${Date.now()}`,
+      // Kendi gönderdiğimiz mesajı store'a ekle
+      // Webhook'tan gelmeyeceği için kalıcı olarak ekliyoruz
+      const sentMessage: APIMessage = {
+        id: result.id || `sent_${Date.now()}`,
         timestamp: Math.floor(Date.now() / 1000),
         from: sessions.find(s => s.name === sessionId)?.me?.id || '',
         fromMe: true,
@@ -431,7 +451,77 @@ export default function ConversationInbox() {
         replyTo: null
       };
       
-      addMessage(chatId, tempMessage);
+      // Mesajı store'a ekle
+      addMessage(chatId, sentMessage);
+      
+      // UI'da mesajı hemen göster
+      const formattedMessage: Message = {
+        id: sentMessage.id,
+        contactId: selectedContact || '',
+        content: text,
+        timestamp: new Date(sentMessage.timestamp * 1000).toLocaleTimeString('tr-TR', { 
+          hour: '2-digit', 
+          minute: '2-digit' 
+        }),
+        isOutgoing: true,
+        status: 'sent',
+        type: 'text',
+        rawId: sentMessage.id
+      };
+      
+      // Mevcut mesajlara ekle (reversed olduğu için sona ekle)
+      setMessages(prev => [...prev, formattedMessage]);
+      
+      // Overview'ı da güncelle (kendi mesajımız için)
+      const currentSession = sessions.find(s => s.name === sessionId);
+      if (currentSession) {
+        const overviewUpdate = {
+          id: chatId,
+          name: null, // Mevcut name korunacak
+          lastMessage: {
+            id: sentMessage.id,
+            timestamp: sentMessage.timestamp,
+            from: sentMessage.from,
+            fromMe: true,
+            source: sessionId,
+            body: text,
+            to: chatId,
+            participant: null,
+            hasMedia: false,
+            media: null,
+            ack: 1,
+            ackName: 'sent',
+            replyTo: null,
+            _data: result
+          }
+        };
+        
+        // Store'da overview'ı güncelle
+        const { overviews } = useSessionStore.getState();
+        if (overviews[sessionId]) {
+          const updatedOverviews = [...overviews[sessionId]];
+          const existingIndex = updatedOverviews.findIndex(c => c.id === chatId);
+          
+          if (existingIndex !== -1) {
+            // Mevcut chat'i güncelle ve en üste taşı
+            const existingChat = updatedOverviews[existingIndex];
+            const updatedChat = {
+              ...existingChat,
+              lastMessage: overviewUpdate.lastMessage
+            };
+            
+            updatedOverviews.splice(existingIndex, 1);
+            updatedOverviews.unshift(updatedChat);
+            
+            useSessionStore.setState({
+              overviews: {
+                ...overviews,
+                [sessionId]: updatedOverviews
+              }
+            });
+          }
+        }
+      }
       
       return result;
     } catch (err) {
@@ -504,7 +594,7 @@ export default function ConversationInbox() {
     switch (filterType) {
       case 'unread':
         // fromMe: false ve ack: 1 olan mesajlar (okunmamış)
-        return matchesSearch && (contact.lastMessageAck === 1) && contact.lastMessageId.startsWith('false');
+        return matchesSearch && (contact.lastMessageAck === 1) && typeof contact.lastMessageId === 'string' && contact.lastMessageId.startsWith('false');
       case 'pinned':
         return matchesSearch && contact.isPinned;
       case 'archived':
@@ -523,8 +613,24 @@ export default function ConversationInbox() {
     }
 
     try {
+      // Mesaj gönderildiğinde typing'i durdur
+      stopTyping();
+      setHasStartedTyping(false);
+      if (typingTimeout) {
+        clearTimeout(typingTimeout);
+        setTypingTimeout(null);
+      }
+      
       await sendMessage(selectedContactData.rawChatId, selectedContactData.sessionId, messageInput);
       setMessageInput('');
+      
+      // Mesaj gönderildikten sonra en alta scroll et
+      setTimeout(() => {
+        const messagesContainer = document.querySelector('.messages-container') as HTMLElement;
+        if (messagesContainer) {
+          messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+      }, 100);
     } catch (err) {
       console.error('Error sending message:', err);
     }
@@ -872,7 +978,7 @@ export default function ConversationInbox() {
           <div className="flex flex-wrap gap-1">
             {[
               { key: 'all', label: 'Tümü', count: contacts.length },
-              { key: 'unread', label: 'Okunmamış', count: contacts.filter(c => (c.lastMessageAck === 1)  && c.lastMessageId.startsWith('false')).length },
+              { key: 'unread', label: 'Okunmamış', count: contacts.filter(c => (c.lastMessageAck === 1) && typeof c.lastMessageId === 'string' && c.lastMessageId.startsWith('false')).length },
               { key: 'pinned', label: 'Sabitlenmiş', count: contacts.filter(c => c.isPinned).length },
               { key: 'archived', label: 'Arşiv', count: contacts.filter(c => c.isArchived).length }
             ].map((filter) => (
@@ -1194,9 +1300,10 @@ export default function ConversationInbox() {
                     onChange={(e) => {
                       setMessageInput(e.target.value);
                       
-                      // Yazıyor durumunu başlat
-                      if (!isTyping) {
+                      // İlk karakter yazıldığında typing başlat
+                      if (!hasStartedTyping && e.target.value.trim()) {
                         startTyping();
+                        setHasStartedTyping(true);
                       }
                       
                       // Önceki timeout'u temizle
@@ -1204,12 +1311,16 @@ export default function ConversationInbox() {
                         clearTimeout(typingTimeout);
                       }
                       
-                      // 2 saniye sonra yazıyor durumunu durdur
-                      const timeout = setTimeout(() => {
-                        stopTyping();
-                      }, 2000);
-                      
-                      setTypingTimeout(timeout);
+                      // 3 saniye sonra yazıyor durumunu durdur (sadece mesaj boşsa)
+                      if (e.target.value.trim()) {
+                        const timeout = setTimeout(() => {
+                          if (messageInput.trim()) {
+                            stopTyping();
+                            setHasStartedTyping(false);
+                          }
+                        }, 3000);
+                        setTypingTimeout(timeout);
+                      }
                     }}
                     onKeyPress={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
@@ -1218,16 +1329,10 @@ export default function ConversationInbox() {
                       }
                     }}
                     onFocus={() => {
-                      if (messageInput.trim()) {
-                        startTyping();
-                      }
+                      // Focus'ta typing başlatma, sadece yazmaya başladığında
                     }}
                     onBlur={() => {
-                      stopTyping();
-                      if (typingTimeout) {
-                        clearTimeout(typingTimeout);
-                        setTypingTimeout(null);
-                      }
+                      // Blur'da typing durdurma, sadece timeout veya gönder tuşunda
                     }}
                     className="min-h-[44px] max-h-32 resize-none rounded-2xl border-gray-200 focus:border-[#075E54] focus:ring-[#075E54] pr-12"
                     disabled={sendingMessage}

@@ -75,6 +75,7 @@ interface SessionStoreState {
   updateOverview: (sessionId: string, chatOverview: APIChatOverview) => void;
   addMessage: (chatId: string, message: APIMessage) => void;
   updateMessageStatus: (chatId: string, messageId: string, ack: number) => void;
+  fetchChatMessagesInBackground: (sessionId: string, chatId: string) => Promise<void>;
 }
 
 export const useSessionStore = create<SessionStoreState>((set, get) => {
@@ -175,7 +176,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
       }
       
       const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://waha-backend.onrender.com/api/v1';
-      const wsUrl = baseUrl.replace('http://', 'ws://')
+      const wsUrl = baseUrl.replace('https://', 'wss://').replace('http://', 'ws://');
       const ws = new WebSocket(`${wsUrl}/ws/session-status`);
       console.log('Session Status WebSocket açılıyor...');
       
@@ -268,7 +269,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
       }
       
       const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://waha-backend.onrender.com/api/v1';
-      const wsUrl = baseUrl.replace('http://', 'ws://')
+      const wsUrl = baseUrl.replace('https://', 'wss://').replace('http://', 'ws://');
       const ws = new WebSocket(`${wsUrl}/ws/chat-overview`);
       console.log('Chat Overview WebSocket açılıyor...');
       
@@ -277,6 +278,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
         set({ chatWebsocketConnected: true });
         // Mevcut session'lara subscribe ol
         const sessions = get().sessions;
+        console.log('Subscribing to sessions:', sessions.map(s => s.name));
         sessions.forEach((session) => {
           ws.send(JSON.stringify({ action: 'subscribe', session: session.name }));
           console.log('Subscribed to chat overview for session:', session.name);
@@ -325,6 +327,12 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
                 console.log('Preserved picture:', existingChat.picture);
                 console.log('Updated name:', updatedChat.name);
                 console.log('Updated lastMessage:', updatedChat.lastMessage.body);
+                
+                // Yeni mesaj geldiğinde o chat'in mesajlarını arka planda fetch et
+                if (chatOverview.lastMessage && !chatOverview.lastMessage.fromMe) {
+                  // Sadece gelen mesajlar için fetch et (fromMe: false)
+                  get().fetchChatMessagesInBackground(session, chatOverview.id);
+                }
               } else {
                 // Yeni chat ekle (en üste)
                 updatedOverviews.unshift(chatOverview);
@@ -550,6 +558,10 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
         set({ chatWebsocketConnected: false });
       };
       
+      // WebSocket bağlantı durumunu logla
+      console.log('Chat Overview WebSocket URL:', wsUrl);
+      console.log('WebSocket readyState:', ws.readyState);
+      
       set({ chatWebsocket: ws });
     },
     updateOverview: (sessionId: string, chatOverview: APIChatOverview) => {
@@ -593,25 +605,70 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
         });
       }
     },
-    updateMessageStatus: (chatId: string, messageId: string, ack: number) => {
-      const { messages } = get();
-      const chatMessages = messages[chatId] || [];
-      const messageIndex = chatMessages.findIndex(m => m.id === messageId);
+      updateMessageStatus: (chatId: string, messageId: string, ack: number) => {
+    const { messages } = get();
+    const chatMessages = messages[chatId] || [];
+    const messageIndex = chatMessages.findIndex(m => m.id === messageId);
+    
+    if (messageIndex !== -1) {
+      const updatedMessages = [...chatMessages];
+      updatedMessages[messageIndex] = {
+        ...updatedMessages[messageIndex],
+        ack: ack
+      };
       
-      if (messageIndex !== -1) {
-        const updatedMessages = [...chatMessages];
-        updatedMessages[messageIndex] = {
-          ...updatedMessages[messageIndex],
-          ack: ack
-        };
-        
-        set({ 
-          messages: { 
-            ...messages, 
-            [chatId]: updatedMessages 
-          } 
-        });
+      set({ 
+        messages: { 
+          ...messages, 
+          [chatId]: updatedMessages 
+        } 
+      });
+    }
+  },
+  
+  // Arka planda chat mesajlarını fetch et
+  fetchChatMessagesInBackground: async (sessionId: string, chatId: string) => {
+    try {
+      console.log(`Fetching messages in background for chat: ${chatId}`);
+      const response = await authenticatedFetch(`/chats/${sessionId}/${chatId}/messages?limit=20&offset=0`);
+      
+      if (!response.ok) {
+        console.error(`Failed to fetch messages for chat ${chatId}`);
+        return;
       }
-    },
+      
+      const apiMessages: APIMessage[] = await response.json();
+      const { messages } = get();
+      
+      // Mevcut mesajları güncelle/ekle
+      const existingMessages = messages[chatId] || [];
+      const updatedMessages = [...existingMessages];
+      
+      apiMessages.forEach((newMessage) => {
+        const existingIndex = existingMessages.findIndex(m => m.id === newMessage.id);
+        if (existingIndex !== -1) {
+          // Mevcut mesajı güncelle
+          updatedMessages[existingIndex] = newMessage;
+        } else {
+          // Yeni mesaj ekle
+          updatedMessages.push(newMessage);
+        }
+      });
+      
+      // Mesajları timestamp'e göre sırala
+      updatedMessages.sort((a, b) => a.timestamp - b.timestamp);
+      
+      set({ 
+        messages: { 
+          ...messages, 
+          [chatId]: updatedMessages 
+        } 
+      });
+      
+      console.log(`Background fetch completed for chat ${chatId}: ${apiMessages.length} messages`);
+    } catch (error) {
+      console.error(`Error fetching messages in background for chat ${chatId}:`, error);
+    }
+  },
   });
 }); 

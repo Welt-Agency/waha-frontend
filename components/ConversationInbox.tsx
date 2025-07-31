@@ -843,6 +843,14 @@ export default function ConversationInbox() {
     }
   };
 
+  // Mesajlar veya seçili chat değiştiğinde scroll'u en alta al
+  useEffect(() => {
+    const messagesContainer = document.querySelector('.messages-container') as HTMLElement;
+    if (messagesContainer) {
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+  }, [messages, selectedContact]);
+
   return (
     <div className="flex h-full bg-gray-50">
       {/* Contacts Sidebar */}

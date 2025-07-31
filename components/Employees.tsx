@@ -41,7 +41,7 @@ export default function Employees() {
       const [meRes, usersRes, sessionsRes] = await Promise.all([
         authenticatedFetch('/company/me'),
         authenticatedFetch('/company/users'),
-        authenticatedFetch('/sessions')
+        authenticatedFetch('/sessions/')
       ]);
       if (!meRes.ok) throw new Error('Şirket bilgisi alınamadı');
       if (!usersRes.ok) throw new Error('Kullanıcı listesi alınamadı');

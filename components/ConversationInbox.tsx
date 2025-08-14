@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Search, Filter, MoreHorizontal, Phone, Archive, Pin, Volume2, VolumeX, Clock, Send, Paperclip, Smile, Plus, X, RefreshCw, AlertCircle, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import { authenticatedFetch } from '@/lib/auth';
-import { useSessionStore, APIMessage } from '@/hooks/useSessionStore';
+import { useSessionStore, APIMessage, isSessionWorking } from '@/hooks/useSessionStore';
 
 // API Response Interfaces
 interface APIChatOverview {
@@ -102,7 +102,7 @@ interface Session {
 
 export default function ConversationInbox() {
   const {
-    sessions,
+    sessions: allSessions,
     loading: sessionsLoading,
     error: sessionsError,
     fetchSessions,
@@ -114,6 +114,11 @@ export default function ConversationInbox() {
     chatWebsocketConnected,
     subscribeToChatOverview,
   } = useSessionStore();
+  
+  // Sadece çalışan session'ları filtrele - useMemo ile optimize edildi
+  const sessions = useMemo(() => {
+    return allSessions.filter(isSessionWorking);
+  }, [allSessions]);
 
   // Cache'i bypass eden overview fetch fonksiyonu
   const fetchOverviewForce = async (sessionId: string, limit: number = 25, offset: number = 0) => {
@@ -151,13 +156,15 @@ export default function ConversationInbox() {
   const [isTyping, setIsTyping] = useState(false);
   const [typingTimeout, setTypingTimeout] = useState<NodeJS.Timeout | null>(null);
   const [hasStartedTyping, setHasStartedTyping] = useState(false);
+  const [overviewLoading, setOverviewLoading] = useState(false); // Yeni loading state
+  const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0, batch: 0, totalBatches: 0 }); // Progress tracking
 
   // On mount: fetch sessions if not loaded
   useEffect(() => {
-    if (sessions.length === 0) {
+    if (allSessions.length === 0) {
       fetchSessions();
     }
-  }, [sessions.length, fetchSessions]);
+  }, [allSessions.length, fetchSessions]);
 
   // İlk session seçimini sadece bir kere yap
   useEffect(() => {
@@ -168,55 +175,93 @@ export default function ConversationInbox() {
 
   // Websocket başlatma
   useEffect(() => {
-    if (sessions.length > 0) {
+    if (allSessions.length > 0) {
       console.log('Starting WebSocket connection...');
       subscribeToChatOverview();
     }
-  }, [sessions, subscribeToChatOverview]);
+  }, [allSessions.length, subscribeToChatOverview]);
 
-  // selectedSession değiştiğinde overview cache'de yoksa fetch et, ilk fetch'te prefetch başlat
+  // selectedSession değiştiğinde overview cache'de yoksa fetch et, arka planda prefetch başlat
   useEffect(() => {
     if (selectedSession) {
       setLoading(true);
       
       if (selectedSession === 'ALL') {
-        // Tüm session'ların overview'larını birleştir
+        // Önce mevcut overview'ları göster
         const allContacts: Contact[] = [];
+        const sessionsWithOverviews = sessions.filter(session => overviews[session.name]);
+        const sessionsWithoutOverviews = sessions.filter(session => !overviews[session.name]);
         
-        // Tüm session'lar için force fetch yap
-        const sessionPromises = sessions.map(async (session) => {
-          try {
-            const data = await fetchOverviewForce(session.name, 25, 0); // Her session'dan ilk 25 chat
-            if (data) {
-              const sessionContacts = formatContacts(data, session.name);
-              allContacts.push(...sessionContacts);
+        // Mevcut overview'ları hemen göster
+        sessionsWithOverviews.forEach(session => {
+          const sessionContacts = formatContacts(overviews[session.name], session.name);
+          allContacts.push(...sessionContacts);
+        });
+        
+        // Mevcut contact'ları hemen set et
+        setContacts(allContacts);
+        setLoading(false);
+        
+        // Eğer hiç overview yoksa loading göster
+        if (sessionsWithoutOverviews.length === sessions.length) {
+          setOverviewLoading(true);
+          setLoadingProgress({ current: 0, total: sessionsWithoutOverviews.length, batch: 0, totalBatches: Math.ceil(sessionsWithoutOverviews.length / 5) });
+        }
+        
+        // Eksik overview'ları arka planda yükle
+        if (sessionsWithoutOverviews.length > 0) {
+          const sessionPromises = sessionsWithoutOverviews.map(async (session, index) => {
+            try {
+              const data = await fetchOverviewForce(session.name, 25, 0);
+              if (data) {
+                const sessionContacts = formatContacts(data, session.name);
+                // Yeni contact'ları mevcut listeye ekle
+                setContacts(prev => {
+                  const newContacts = [...prev, ...sessionContacts];
+                  // Son mesaj zamanına göre sırala
+                  newContacts.sort((a, b) => {
+                    const timeA = a.lastMessageTimestamp || 0;
+                    const timeB = b.lastMessageTimestamp || 0;
+                    return timeB - timeA;
+                  });
+                  return newContacts;
+                });
+              }
+              if (sessionsWithoutOverviews.length === sessions.length) {
+                setLoadingProgress(prev => ({ ...prev, current: prev.current + 1 }));
+              }
+            } catch (error) {
+              console.error(`Error fetching overview for session ${session.name}:`, error);
+              if (sessionsWithoutOverviews.length === sessions.length) {
+                setLoadingProgress(prev => ({ ...prev, current: prev.current + 1 }));
+              }
             }
-          } catch (error) {
-            console.error(`Error fetching overview for session ${session.name}:`, error);
-          }
-        });
-        
-        Promise.all(sessionPromises).then(() => {
-          setContacts(allContacts);
-          setLoading(false);
-        });
+          });
+          
+          Promise.all(sessionPromises).then(() => {
+            setOverviewLoading(false);
+            setLoadingProgress({ current: 0, total: 0, batch: 0, totalBatches: 0 });
+          });
+        }
       } else {
         if (overviews[selectedSession]) {
           setContacts(formatContacts(overviews[selectedSession], selectedSession));
           setLoading(false);
+          setOverviewLoading(false);
         } else {
           fetchOverview(selectedSession, 25, 0).then((data) => {
             if (data) {
               setContacts(formatContacts(data, selectedSession));
-              // Sadece ilk fetch'te prefetch başlat
+              // Arka planda sessizce prefetch başlat (loading gösterme)
               prefetchAllOverviews(selectedSession);
             }
             setLoading(false);
+            setOverviewLoading(false);
           });
         }
       }
     }
-  }, [selectedSession, overviews, fetchOverview, prefetchAllOverviews, sessions]);
+  }, [selectedSession, overviews, fetchOverview, prefetchAllOverviews]);
 
   // Overviews değiştiğinde contacts'i güncelle
   useEffect(() => {
@@ -227,7 +272,7 @@ export default function ConversationInbox() {
       console.log('Current overviews:', overviews);
       
       if (selectedSession === 'ALL') {
-        // Tüm session'ların overview'larını birleştir
+        // Tüm çalışan session'ların overview'larını birleştir
         const allContacts: Contact[] = [];
         sessions.forEach((session) => {
           if (overviews[session.name]) {
@@ -237,9 +282,16 @@ export default function ConversationInbox() {
           }
         });
         
-        console.log('Total contacts after merge:', allContacts.length);
+        // Tüm contact'ları son mesaj zamanına göre sırala (en yeni en üstte)
+        allContacts.sort((a, b) => {
+          const timeA = a.lastMessageTimestamp || 0;
+          const timeB = b.lastMessageTimestamp || 0;
+          return timeB - timeA; // En yeni en üstte
+        });
+        
+        console.log('Total contacts after merge (all working sessions):', allContacts.length);
         setContacts(allContacts);
-        console.log('Updated ALL contacts:', allContacts.length);
+        console.log('Updated ALL working sessions contacts:', allContacts.length);
       } else if (overviews[selectedSession]) {
         console.log(`Processing single session ${selectedSession} with ${overviews[selectedSession].length} chats`);
         const newContacts = formatContacts(overviews[selectedSession], selectedSession);
@@ -251,7 +303,7 @@ export default function ConversationInbox() {
       }
       console.log('=== END OVERVIEWS CHANGED ===');
     }
-  }, [overviews, selectedSession, sessions]);
+  }, [overviews, selectedSession]);
 
   // Debug: Overviews değişikliklerini takip et
   useEffect(() => {
@@ -330,7 +382,7 @@ export default function ConversationInbox() {
 
   // Helper to format contacts from overview
   function formatContacts(apiChats: any[], sessionId: string): Contact[] {
-    return apiChats.map((chat, index) => {
+    const contacts = apiChats.map((chat, index) => {
       const phoneNumber = chat.id.replace('@c.us', '');
       const displayName = chat.name || phoneNumber;
       const lastMessageTime = new Date(chat.lastMessage.timestamp * 1000);
@@ -364,6 +416,15 @@ export default function ConversationInbox() {
         lastMessageTimestamp: chat.lastMessage.timestamp,
       };
     });
+    
+    // Contact'ları son mesaj zamanına göre sırala (en yeni en üstte)
+    contacts.sort((a, b) => {
+      const timeA = a.lastMessageTimestamp || 0;
+      const timeB = b.lastMessageTimestamp || 0;
+      return timeB - timeA; // En yeni en üstte
+    });
+    
+    return contacts;
   }
 
   // Fetch messages for a specific chat
@@ -529,7 +590,7 @@ export default function ConversationInbox() {
     if (selectedSession === 'ALL') {
       handleSessionChange('ALL');
     }
-  }, [sessions]);
+  }, [selectedSession]);
 
   // selectedSession değiştiğinde ve ALL değilse otomatik olarak fetchChats çağır
   useEffect(() => {
@@ -898,7 +959,7 @@ export default function ConversationInbox() {
                         <SelectValue placeholder="Session seçin" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="ALL">Tüm Sessionlar</SelectItem>
+                        <SelectItem value="ALL">Tüm Çalışan Session'lar</SelectItem>
                         {sessions.map((session) => (
                           <SelectItem key={session.name} value={session.name}>
                             <div className="flex flex-col">
@@ -939,17 +1000,38 @@ export default function ConversationInbox() {
                   <SelectValue placeholder="Session seçin" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="ALL">Tüm Sessionlar</SelectItem>
+                  <SelectItem value="ALL">Tüm Çalışan Session'lar</SelectItem>
                   {sessions.map((session) => (
                     <SelectItem key={session.name} value={session.name}>
-                      <div className="flex items-center space-x-2">
-                        <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                        <span>{session.me?.pushName || session.name}</span>
+                      <div className="flex flex-col">
+                        <span className="font-medium">{session.me?.pushName || session.name}</span>
+                        <span className="text-sm text-gray-500">+{session.me?.id?.replace('@c.us', '')}</span>
                       </div>
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              
+              {/* Overview Loading Progress - Sadece gerçekten gerekli olduğunda göster */}
+              {overviewLoading && loadingProgress.total > 0 && loadingProgress.total > 3 && (
+                <div className="mt-2 p-2 bg-blue-50 rounded-md">
+                  <div className="flex items-center justify-between text-xs text-blue-700 mb-1">
+                    <span>Diğer session'lar yükleniyor...</span>
+                    <span>{loadingProgress.current}/{loadingProgress.total}</span>
+                  </div>
+                  {loadingProgress.totalBatches > 1 && (
+                    <div className="text-xs text-blue-600 mb-1">
+                      Batch: {loadingProgress.batch + 1}/{loadingProgress.totalBatches}
+                    </div>
+                  )}
+                  <div className="w-full bg-blue-200 rounded-full h-1.5">
+                    <div 
+                      className="bg-blue-600 h-1.5 rounded-full transition-all duration-300"
+                      style={{ width: `${(loadingProgress.current / loadingProgress.total) * 100}%` }}
+                    ></div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           

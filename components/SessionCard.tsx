@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Smartphone, MoreHorizontal, RotateCcw, AlertCircle, Signal, SignalLow, Plus } from 'lucide-react';
 import { authenticatedFetch } from '@/lib/auth';
+import { isSessionWorking, isSessionFailed, isSessionStopped, isSessionStarting, isSessionWaitingForQR } from '@/hooks/useSessionStore';
 
 interface APISession {
   name: string;
@@ -290,6 +291,55 @@ export default function SessionCard({ sessionId, sessionData, onRemove, onRestar
       </CardHeader>
       <CardContent>
         <div className="space-y-4">
+          {/* Session durumu uyarıları */}
+          {session.originalData && isSessionFailed(session.originalData) && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+              <div className="flex items-center space-x-2">
+                <AlertCircle className="h-4 w-4 text-red-600" />
+                <span className="text-red-800 text-sm font-medium">Session Hatası</span>
+              </div>
+              <p className="text-red-700 text-xs mt-1">
+                Bu session mesaj gönderemez ve alınamaz. Lütfen yeniden başlatın.
+              </p>
+            </div>
+          )}
+          
+          {session.originalData && isSessionStopped(session.originalData) && (
+            <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+              <div className="flex items-center space-x-2">
+                <AlertCircle className="h-4 w-4 text-yellow-600" />
+                <span className="text-yellow-800 text-sm font-medium">Session Durdurulmuş</span>
+              </div>
+              <p className="text-yellow-700 text-xs mt-1">
+                Bu session mesaj gönderemez. Kullanmak için yeniden başlatın.
+              </p>
+            </div>
+          )}
+          
+          {session.originalData && isSessionWaitingForQR(session.originalData) && (
+            <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg">
+              <div className="flex items-center space-x-2">
+                <AlertCircle className="h-4 w-4 text-purple-600" />
+                <span className="text-purple-800 text-sm font-medium">QR Kod Bekliyor</span>
+              </div>
+              <p className="text-purple-700 text-xs mt-1">
+                WhatsApp'tan QR kodu tarayın veya "QR ile Bağlan" butonunu kullanın.
+              </p>
+            </div>
+          )}
+          
+          {session.originalData && isSessionStarting(session.originalData) && (
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+              <div className="flex items-center space-x-2">
+                <AlertCircle className="h-4 w-4 text-blue-600" />
+                <span className="text-blue-800 text-sm font-medium">Session Başlatılıyor</span>
+              </div>
+              <p className="text-blue-700 text-xs mt-1">
+                Session başlatılıyor, lütfen bekleyin...
+              </p>
+            </div>
+          )}
+          
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2">
               {getStatusIcon(session.status)}

@@ -16,6 +16,35 @@ export interface APISession {
   assignedWorker: string;
 }
 
+// Session durumlarını kontrol eden utility fonksiyonları
+export const isSessionWorking = (session: APISession): boolean => {
+  return session.status === 'WORKING' && !!session.me && !!session.me.id;
+};
+
+export const isSessionFailed = (session: APISession): boolean => {
+  return session.status === 'FAILED';
+};
+
+export const isSessionStopped = (session: APISession): boolean => {
+  return session.status === 'STOPPED';
+};
+
+export const isSessionStarting = (session: APISession): boolean => {
+  return session.status === 'STARTING';
+};
+
+export const isSessionWaitingForQR = (session: APISession): boolean => {
+  return session.status === 'SCAN_QR_CODE';
+};
+
+export const canSessionSendMessages = (session: APISession): boolean => {
+  return isSessionWorking(session);
+};
+
+export const canSessionReceiveMessages = (session: APISession): boolean => {
+  return isSessionWorking(session);
+};
+
 export interface APIChatOverview {
   id: string;
   name: string | null;
@@ -64,12 +93,13 @@ interface SessionStoreState {
   initialized: boolean;
   websocketConnected: boolean;
   chatWebsocketConnected: boolean;
+  // Actions
   fetchSessions: () => Promise<void>;
   forceRefresh: () => Promise<void>;
   setSessions: (sessions: APISession[]) => void;
   setSessionCountInfo: (info: SessionCountInfo) => void;
   fetchOverview: (sessionId: string, limit?: number, offset?: number) => Promise<APIChatOverview[] | undefined>;
-  prefetchAllOverviews: (excludeSessionId?: string) => Promise<void>;
+  prefetchAllOverviews: (excludeSessionId?: string, onProgress?: (progress: { current: number, total: number, batch: number, totalBatches: number }) => void) => Promise<void>;
   subscribeToSessionStatus: () => void;
   subscribeToChatOverview: () => void;
   updateOverview: (sessionId: string, chatOverview: APIChatOverview) => void;
@@ -155,18 +185,98 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
         return undefined;
       }
     },
-    prefetchAllOverviews: async (excludeSessionId) => {
+    prefetchAllOverviews: async (excludeSessionId, onProgress?: (progress: { current: number, total: number, batch: number, totalBatches: number }) => void) => {
       const { sessions, overviews, fetchOverview } = get();
-      const prefetch = async () => {
-        for (const session of sessions) {
-          if (session.name === excludeSessionId) continue;
-          if (overviews[session.name]) continue;
-          // Prefetch'i yavaşlatmak için küçük bir delay ekle (ör: 1sn)
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-          await fetchOverview(session.name, 25, 0); // İlk 50 chat'i al
+      
+      // Sadece fetch edilmemiş session'ları al
+      const sessionsToFetch = sessions.filter(session => 
+        session.name !== excludeSessionId && !overviews[session.name]
+      );
+      
+      if (sessionsToFetch.length === 0) {
+        console.log('Tüm overview\'lar zaten yüklü, prefetch atlanıyor');
+        return;
+      }
+      
+      console.log(`${sessionsToFetch.length} session için overview prefetch başlatılıyor...`);
+      
+      // Progress callback varsa batch loading kullan, yoksa paralel loading
+      if (onProgress) {
+        // Batch loading - session'ları 5'erli gruplar halinde yükle
+        const batchSize = 5;
+        const batches = [];
+        
+        for (let i = 0; i < sessionsToFetch.length; i += batchSize) {
+          batches.push(sessionsToFetch.slice(i, i + batchSize));
         }
-      };
-      await prefetch();
+        
+        let totalCompleted = 0;
+        
+        for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+          const batch = batches[batchIndex];
+          console.log(`Batch ${batchIndex + 1}/${batches.length} yükleniyor (${batch.length} session)`);
+          
+          // Progress callback'i çağır
+          onProgress({ 
+            current: totalCompleted, 
+            total: sessionsToFetch.length, 
+            batch: batchIndex, 
+            totalBatches: batches.length 
+          });
+          
+          // Her batch'i paralel olarak yükle
+          const batchPromises = batch.map(async (session) => {
+            try {
+              await fetchOverview(session.name, 25, 0);
+              console.log(`Overview yüklendi: ${session.name}`);
+              totalCompleted++;
+              
+              // Progress callback'i çağır
+              onProgress({ 
+                current: totalCompleted, 
+                total: sessionsToFetch.length, 
+                batch: batchIndex, 
+                totalBatches: batches.length 
+              });
+            } catch (error) {
+              console.error(`Overview yüklenemedi: ${session.name}`, error);
+              totalCompleted++;
+              
+              // Progress callback'i çağır
+              onProgress({ 
+                current: totalCompleted, 
+                total: sessionsToFetch.length, 
+                batch: batchIndex, 
+                totalBatches: batches.length 
+              });
+            }
+          });
+          
+          await Promise.all(batchPromises);
+          
+          // Batch'ler arasında kısa bir bekleme (rate limiting için)
+          if (batchIndex < batches.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+        }
+      } else {
+        // Arka planda sessizce paralel yükle (progress gösterme)
+        const promises = sessionsToFetch.map(async (session) => {
+          try {
+            await fetchOverview(session.name, 25, 0);
+            console.log(`Arka plan overview yüklendi: ${session.name}`);
+          } catch (error) {
+            console.error(`Arka plan overview yüklenemedi: ${session.name}`, error);
+          }
+        });
+        
+        // Tüm promise'ları başlat ama bekleme
+        Promise.all(promises).then(() => {
+          console.log('Tüm arka plan overview\'lar yüklendi');
+        });
+      }
+      
+      console.log('Overview prefetch tamamlandı');
     },
     subscribeToSessionStatus: () => {
       const { websocket } = get();
@@ -339,6 +449,13 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
                 console.log(`Added new chat: ${chatOverview.id}`);
               }
               
+              // Overview'ları son mesaj zamanına göre sırala (en yeni en üstte)
+              updatedOverviews.sort((a, b) => {
+                const timeA = a.lastMessage?.timestamp || 0;
+                const timeB = b.lastMessage?.timestamp || 0;
+                return timeB - timeA; // En yeni en üstte
+              });
+              
               console.log('Updated overviews for session:', session, updatedOverviews.length);
               
               set({ 
@@ -411,6 +528,13 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
                   console.log('Added new chat to overviews');
                 }
                 
+                // Overview'ları son mesaj zamanına göre sırala (en yeni en üstte)
+                updatedOverviews.sort((a, b) => {
+                  const timeA = a.lastMessage?.timestamp || 0;
+                  const timeB = b.lastMessage?.timestamp || 0;
+                  return timeB - timeA; // En yeni en üstte
+                });
+                
                 const newOverviews = { 
                   ...overviews, 
                   [session]: updatedOverviews 
@@ -460,6 +584,13 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
                   };
                   updatedOverviews.splice(existingIndex, 1);
                   updatedOverviews.unshift(updatedChat);
+                  
+                  // Overview'ları son mesaj zamanına göre sırala (en yeni en üstte)
+                  updatedOverviews.sort((a, b) => {
+                    const timeA = a.lastMessage?.timestamp || 0;
+                    const timeB = b.lastMessage?.timestamp || 0;
+                    return timeB - timeA; // En yeni en üstte
+                  });
                   
                   set({ 
                     overviews: { 
@@ -671,4 +802,11 @@ export const useSessionStore = create<SessionStoreState>((set, get) => {
     }
   },
   });
-}); 
+});
+
+// Selector fonksiyonları - session durumlarına göre filtreleme
+export const useWorkingSessions = () => useSessionStore(state => state.sessions.filter(isSessionWorking));
+export const useFailedSessions = () => useSessionStore(state => state.sessions.filter(isSessionFailed));
+export const useStoppedSessions = () => useSessionStore(state => state.sessions.filter(isSessionStopped));
+export const useStartingSessions = () => useSessionStore(state => state.sessions.filter(isSessionStarting));
+export const useQRWaitingSessions = () => useSessionStore(state => state.sessions.filter(isSessionWaitingForQR));

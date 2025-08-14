@@ -15,7 +15,7 @@ import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { authenticatedFetch } from '@/lib/auth';
-import { useSessionStore } from '@/hooks/useSessionStore';
+import { useSessionStore, isSessionWorking } from '@/hooks/useSessionStore';
 
 interface Session {
   id: string;
@@ -118,19 +118,18 @@ export default function BulkMessage() {
   const [cancelling, setCancelling] = useState(false);
   const [jobDetailPollingInterval, setJobDetailPollingInterval] = useState<NodeJS.Timeout | null>(null);
 
-  // useSessionStore'dan session'ları al
-  const { sessions: apiSessions, loading: sessionsLoading, fetchSessions } = useSessionStore();
+  // useSessionStore'dan session'ları al - sadece çalışan session'ları al
+  const { sessions: allSessions, loading: sessionsLoading, fetchSessions } = useSessionStore();
+  const apiSessions = allSessions.filter(isSessionWorking);
   
-  // API session'larını formatla
-  const sessions: Session[] = apiSessions
-    .filter(session => session.me && session.me.id && session.status === 'WORKING')
-    .map((session, index) => ({
-      id: session.name,
-      name: session.name,
-      label: session.me!.pushName || `Session ${index + 1}`,
-      phone: session.me!.id.replace('@c.us', ''),
-      status: session.status
-    }));
+  // API session'larını formatla - zaten sadece working session'lar geldi
+  const sessions: Session[] = apiSessions.map((session, index) => ({
+    id: session.name,
+    name: session.name,
+    label: session.me!.pushName || `Session ${index + 1}`,
+    phone: session.me!.id.replace('@c.us', ''),
+    status: session.status
+  }));
 
   // Kullanıcı sayısını hesapla (her satır bir kişi)
   const getUserCount = () => {
